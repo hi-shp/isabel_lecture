@@ -147,7 +147,7 @@ class CoreTests(unittest.TestCase):
 
     def test_malformed_inputs_and_active_mutation(self):
         with self.assertRaises(ValueError): self.s.configure('simulated',[{'lat':float('nan'),'lon':1}],{})
-        with self.assertRaises(ValueError): self.s.configure('simulated',[self.p],{'throttle':90})
+        with self.assertRaises(ValueError): self.s.configure('simulated',[self.p],{'throttle':101})
         with self.assertRaises(ValueError): self.rec.folder_for('../escape')
         self.s.configure('simulated',[self.p],{}); self.s.set_virtual(**self.p); self.sample(); self.s.start('o')
         self.s.set_virtual(**self.p)

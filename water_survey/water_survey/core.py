@@ -10,7 +10,7 @@ from .river_navigation import RiverZigzag, heading_error
 
 R = 6378137.0
 ACTIVE = ('running', 'dwelling')
-SETTING_BOUNDS=dict(cell_m=(1,100),radius_m=(1,20),dwell_s=(3,120),throttle=(0,30),
+SETTING_BOUNDS=dict(cell_m=(1,100),radius_m=(1,20),dwell_s=(3,120),throttle=(0,100),
                     obstacle_m=(.2,30),zigzag_deg=(0,80),turn_interval_s=(0,120))
 LIVE_SETTINGS=set(SETTING_BOUNDS)-{'cell_m'}
 

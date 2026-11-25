@@ -41,4 +41,15 @@ class ManualPropulsionTests(unittest.TestCase):
         self.assertEqual(self.s.output()['throttle'],0)
         self.assertEqual(self.s.output()['servo'],150)
 
+    def test_full_range_is_accepted_and_sent_without_changing_mission(self):
+        self.s.live_update({'throttle':100},None,self.s.plan_revision)
+        self.s.start('owner',True,'river_zigzag');self.s.tick()
+        mission=self.s.mission_id
+        self.assertEqual(self.s.output()['throttle'],100)
+        self.s.manual_turn();self.assertEqual(self.s.output()['throttle'],100)
+        self.s.live_update({'throttle':65},None,self.s.plan_revision)
+        self.assertEqual(self.s.output()['throttle'],65);self.assertEqual(self.s.mission_id,mission)
+        with self.assertRaises(ValueError):self.s.live_update({'throttle':101},None,self.s.plan_revision)
+        self.s.stop();self.assertEqual(self.s.output()['throttle'],0)
+
 if __name__=='__main__':unittest.main()

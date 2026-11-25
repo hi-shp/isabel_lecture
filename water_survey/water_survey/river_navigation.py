@@ -50,18 +50,26 @@ def forward_scan(ranges, angle_min, angle_increment, range_min, range_max, yaw_o
 
 
 class RiverZigzag:
-    """Hold each leg; switch on a front obstacle after the configured interval."""
+    """Keep the requested offset from the current goal; alternate on obstacles."""
     def __init__(self, clock=time.monotonic):
         self.side=1;self.course=None;self.waypoint=None;self.last_scan=None
         self.bank_armed=True;self.switches=0
         self.offset=None;self.threshold=None
         self.clock=clock;self.last_turn=-math.inf
+        self.started=False
 
     def guide(self, goal_bearing, heading, waypoint, scan,offset_deg=45.,obstacle_m=2.,turn_interval_s=3.):
         event=None
         if self.threshold!=obstacle_m:self.last_scan=None
-        if self.course is None or self.waypoint!=waypoint or self.offset!=offset_deg or offset_deg==0:
-            self.waypoint=waypoint;self.course=(goal_bearing+offset_deg*self.side)%360
+        if not self.started:
+            right=abs(heading_error(goal_bearing+offset_deg,heading))
+            left=abs(heading_error(goal_bearing-offset_deg,heading))
+            self.side=-1 if left<right else 1
+            self.started=True
+        self.waypoint=waypoint
+        # Keep exactly the operator's offset as the goal bearing changes. A
+        # latched absolute course would widen the offset near the destination.
+        self.course=(goal_bearing+offset_deg*self.side)%360
         self.offset=offset_deg;self.threshold=obstacle_m
         if offset_deg==0:
             return dict(course_deg=self.course,goal_bearing_deg=goal_bearing,phase='direct',side=self.side,

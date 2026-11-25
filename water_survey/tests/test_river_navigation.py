@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import zipfile
 
-from water_survey.core import Survey,utc,latlon
+from water_survey.core import Survey,utc,latlon,distance,xy
 from water_survey.node import Dashboard
 from water_survey.recording import Recorder
 from water_survey.river_navigation import forward_scan,trimmed_mean,RiverZigzag
@@ -45,12 +45,25 @@ class RiverGuideTests(unittest.TestCase):
     def observation(self,sequence,blocked):
         return dict(sequence=sequence,front_mean_m=2 if blocked else 10,obstacle=blocked)
 
-    def test_hold_straight_without_time_or_distance_switches(self):
+    def test_keep_requested_offset_from_current_goal_without_timed_switches(self):
         guide=RiverZigzag()
         self.assertEqual(guide.guide(0,45,0,self.observation(1,False))['course_deg'],45)
         for sequence in range(2,100):
             value=guide.guide(20,45,0,self.observation(sequence,False))
-            self.assertEqual(value['course_deg'],45);self.assertEqual(value['bank_switches'],0)
+            self.assertEqual(value['course_deg'],65);self.assertEqual(value['bank_switches'],0)
+
+    def test_start_side_is_closest_to_current_imu_heading(self):
+        for heading,expected in [(40,45),(320,315)]:
+            guide=RiverZigzag()
+            value=guide.guide(0,heading,0,self.observation(1,False))
+            self.assertEqual(value['course_deg'],expected)
+
+    def test_offset_stays_exact_while_approaching_and_changing_goal_bearing(self):
+        guide=RiverZigzag()
+        for sequence,bearing_deg in enumerate([0,10,30,90,150,240,350]):
+            value=guide.guide(bearing_deg,45,0,self.observation(sequence,False),60)
+            error=(value['course_deg']-bearing_deg+180)%360-180
+            self.assertEqual(error,60);self.assertEqual(value['bank_switches'],0)
 
     def test_alternate_only_on_obstacle_after_interval_without_extra_conditions(self):
         guide=RiverZigzag(clock=lambda:0);guide.guide(0,45,0,self.observation(1,False))
@@ -163,6 +176,22 @@ class RiverSurveyTests(unittest.TestCase):
         self.s.imu_update(course+20,utc());self.s.tick()
         self.assertAlmostEqual(self.s.command['servo'],70)
         self.assertEqual(self.s.guidance['course_deg'],course)
+
+    def test_fixed_requested_angle_reaches_final_goal_under_ideal_heading_tracking(self):
+        self.s.configure('real',[latlon(0,50,self.origin)],{'zigzag_deg':45})
+        self.s.start('owner',True,'river_zigzag')
+        for _ in range(300):
+            self.s.tick()
+            if self.s.route_complete:break
+            guide=self.s.guidance
+            offset=(guide['course_deg']-guide['goal_bearing_deg']+180)%360-180
+            self.assertAlmostEqual(abs(offset),45)
+            x,y=xy(self.s.position(),self.origin);a=math.radians(guide['course_deg'])
+            self.fresh(x+.5*math.sin(a),y+.5*math.cos(a))
+            self.s.imu_update(guide['course_deg'],utc())
+        self.assertTrue(self.s.route_complete)
+        self.assertLessEqual(distance(self.s.position(),self.s.route[-1]),3)
+        self.assertEqual(self.s.state,'running');self.assertEqual(self.s.output()['throttle'],0)
 
     def test_click_mode_never_enables_propulsion_with_new_navigation(self):
         self.s.configure('simulated',[latlon(10,0,self.origin)],{})

@@ -1,10 +1,20 @@
 import tempfile
 import unittest
+from pathlib import Path
 from water_survey.core import Survey,utc,latlon
 from water_survey.recording import Recorder
 from water_survey.ntrip_seed import select_seed
 
 class ReferenceTests(unittest.TestCase):
+    def test_settings_survive_new_map_and_process_recreation(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'settings.json';s=Survey(settings_path=path)
+            s.configure('simulated',[],{'throttle':12,'zigzag_deg':60,'turn_interval_s':4.5})
+            s.new_map();restarted=Survey(settings_path=path)
+            self.assertEqual(restarted.settings,s.settings)
+            restarted.live_update({'turn_interval_s':3.2},None,restarted.plan_revision)
+            self.assertEqual(Survey(settings_path=path).settings['turn_interval_s'],3.2)
+
     def test_bringup_first_heading_is_north_then_tracks_relative_rotations(self):
         s=Survey();s.begin_heading_zero();self.assertIsNone(s.heading)
         s.imu_update(300,utc());self.assertEqual(s.heading,0)

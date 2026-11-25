@@ -1,6 +1,9 @@
 import collections
 import datetime as dt
 import math
+import json
+import os
+from pathlib import Path
 import threading
 import time
 from .river_navigation import RiverZigzag, heading_error
@@ -75,7 +78,7 @@ def coverage_plan(area, size):
 
 class Survey:
     """Pure state machine. Virtual GPS never writes to ROS /gps/fix."""
-    def __init__(self, hardware=False, clock=time.monotonic, recorder=None):
+    def __init__(self, hardware=False, clock=time.monotonic, recorder=None, settings_path=None):
         self.lock = threading.RLock()
         self.clock, self.recorder, self.hardware = clock, recorder, hardware
         self.mode = 'real' if hardware else 'simulated'
@@ -83,6 +86,10 @@ class Survey:
         self.route = []
         self.settings = dict(cell_m=5.0, radius_m=3.0, dwell_s=10.0, throttle=20.0,
                              obstacle_m=2.,zigzag_deg=45.,turn_interval_s=3.)
+        self.settings_path=Path(settings_path) if settings_path else None
+        if self.settings_path:
+            try:self.settings=checked_settings(self.settings,json.loads(self.settings_path.read_text(encoding='utf-8'))['settings'])
+            except (OSError,ValueError,TypeError,KeyError):pass
         self.plan_revision=0
         self.speed_m_s=None
         self.pattern, self.area, self.plan = 'waypoints', None, None
@@ -131,6 +138,15 @@ class Survey:
 
     def position(self):
         return self.sim if self.mode == 'simulated' else self.gps
+
+    def save_settings(self, settings):
+        if self.settings_path:
+            self.settings_path.parent.mkdir(parents=True,exist_ok=True)
+            temp=self.settings_path.with_suffix('.tmp')
+            with temp.open('w',encoding='utf-8') as stream:
+                json.dump(dict(settings=settings,saved_utc=utc()),stream,ensure_ascii=False)
+                stream.flush();os.fsync(stream.fileno())
+            temp.replace(self.settings_path)
 
     def gps_update(self, lat, lon, valid, stamp, covariance=None):
         with self.lock:
@@ -196,6 +212,7 @@ class Survey:
                     raise ValueError('먼저 직사각형 조사 범위를 지정하세요.')
                 area = {k: float(area[k]) for k in ('south', 'west', 'north', 'east')}
                 plan, pts = coverage_plan(area, opts['cell_m'])
+            self.save_settings(opts)
             self.mode, self.route, self.settings = mode, pts, opts
             self.pattern, self.area, self.plan = pattern, area if plan else None, plan
             self.armed = False
@@ -236,6 +253,7 @@ class Survey:
                     previous_settings=old_settings,settings=opts,previous_route=old_route,route=route))
                 self.recorder.meta.update(settings=opts.copy(),route=route,plan_revision=self.plan_revision+1)
                 self.recorder.sync(force=True)
+            self.save_settings(opts)
             self.settings=opts;self.route=route;self.plan_revision+=1;self.classify_scan()
             if target_changed:
                 self.route_complete=False
@@ -268,6 +286,7 @@ class Survey:
                 raise ValueError('먼저 조사를 정지하고 정지 명령 전송을 기다리세요.')
             # A new survey clears observations, not the selected GPS input.
             self.state, self.reason, self.mission_id = 'idle', '', None
+            self.pause_reason=None;self.fault_reason=None;self.route_complete=False
             self.route, self.cells, self.area, self.plan = [], {}, None, None
             self.pattern, self.origin, self.index = 'waypoints', None, 0
             self.navigation, self.zigzag, self.guidance, self.leg_origin = 'waypoint', None, None, None

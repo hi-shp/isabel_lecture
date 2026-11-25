@@ -257,7 +257,7 @@ def main(args=None):
                 scan_yaw_offset_deg=self.get_parameter('scan_yaw_offset_deg').value,
                 heading_convention='degrees clockwise from north; IMU ENU yaw converted as (90-yaw)%360',
                 allow_hardware=self.hardware)
-            self.survey=Survey(self.hardware,recorder=self.recorder)
+            self.survey=Survey(self.hardware,recorder=self.recorder,settings_path=self.recorder.root/'settings.json')
             self.heading_reference_file=self.recorder.root/'heading-reference.json'
             try:self.survey.heading_reference_deg=float(json.loads(self.heading_reference_file.read_text())['reference_deg'])
             except (OSError,ValueError,KeyError,TypeError):self.survey.begin_heading_zero()

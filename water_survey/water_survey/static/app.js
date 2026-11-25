@@ -7,7 +7,10 @@ let sensorHealth=null,sensorHealthReceived=0,sensorHealthFileAge=0;
 let livePending={},waypointPending=[],liveSending=false,liveTimer=null,draggingMarker=false;
 const home=[35.1777,129.1198];
 let mapHome=home;
-const map=L.map('map',{doubleClickZoom:false}).setView(home,16);
+let savedZoom=16;
+try{const stored=localStorage.getItem('isabel.map.zoom'),v=Number(stored);if(stored!==null&&Number.isFinite(v)&&v>=0&&v<=22)savedZoom=v;}catch{}
+const map=L.map('map',{doubleClickZoom:false}).setView(home,savedZoom);
+map.on('zoomend',()=>{try{localStorage.setItem('isabel.map.zoom',String(map.getZoom()));}catch{}});
 const tiles=L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:19,maxZoom:22,crossOrigin:true,attribution:'Source: <a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9">Esri</a>, Vantor, Earthstar Geographics, GIS User Community'}).addTo(map);
 tiles.on('load',()=>$('mapStatus').textContent='지도 배경: Esri 위성영상');
 tiles.on('tileerror',()=>$('mapStatus').textContent='지도 배경 연결 대기 · 좌표/격자는 사용 가능');
@@ -121,6 +124,11 @@ map.on('click',e=>run(async()=>{
 $('pattern').onchange=()=>run(async()=>{if($('pattern').value==='coverage'&&!area){$('pattern').value=state?.pattern||'waypoints';choose('area');notice('조사 범위의 두 꼭짓점을 클릭하세요.');return;}if($('pattern').value==='waypoints')route=[];await configure();choose('route');});
 for(const k of liveKeys){$(k).oninput=()=>queueSetting(k);$(k).onchange=()=>queueSetting(k);}
 $('cell_m').onchange=()=>run(configure);
+for(const k of keys)$(k).addEventListener('keydown',e=>{
+ if(e.key!=='Enter')return;e.preventDefault();
+ if(!$(k).reportValidity()||$(k).value==='')return;
+ if(k==='cell_m')run(configure);else{queueSetting(k);flushLive();}
+});
 $('undo').onclick=()=>run(async()=>{route=route.slice(0,-1);await configure();});
 $('clear').onclick=()=>run(async()=>{route=[];area=null;$('pattern').value='waypoints';await configure();});
 function startDrive(action,message){return run(async()=>{if(liveSending||Object.keys(livePending).length||waypointPending.length)throw Error('설정 적용 완료 후 시작하세요.');const generation=driveGeneration;try{await configure();if(generation!==driveGeneration)return;await api(action,{armed:state.hardware,control_revision:state.control_revision});if(generation===driveGeneration)notice(message);}catch(e){if(generation===driveGeneration)throw e;}});}

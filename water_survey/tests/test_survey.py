@@ -142,7 +142,7 @@ class CoreTests(unittest.TestCase):
         self.assertTrue({'samples.csv','samples.geojson','grid.geojson','route.geojson','map.svg','timeseries.svg','report.html'}<=set(z.namelist()))
         self.assertEqual(len(list(csv.DictReader(io.StringIO(z.read('samples.csv').decode())))),2)
         grid=json.loads(z.read('grid.geojson')); self.assertEqual(grid['features'][0]['properties']['mean_mg_l'],7)
-        self.assertIn('실내 시험',z.read('report.html').decode())
+        self.assertIn('수동 GPS 좌표',z.read('report.html').decode())
         self.assertTrue(json.loads(z.read('mission.json'))['experimental'])
 
     def test_malformed_inputs_and_active_mutation(self):

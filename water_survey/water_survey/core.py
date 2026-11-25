@@ -267,16 +267,17 @@ class Survey:
             if owner == self.owner:
                 self.heartbeat = self.clock()
 
-    def prerequisites(self, navigation=None):
+    def prerequisites(self, navigation=None,driving=None):
         navigation = navigation or self.navigation
+        driving=(self.mode=='real' or self.armed) if driving is None else driving
         now = self.clock()
         p = self.position()
         if not p or not p['valid']:
             return 'GPS 위치를 기다리고 있습니다.'
-        if self.mode == 'real':
+        if driving:
             if not self.hardware:
                 return '실내 실행에서는 추진 명령이 비활성화되어 있습니다.'
-            if now-p['mono'] > 3:
+            if self.mode=='real' and now-p['mono'] > 3:
                 return 'GPS 수신이 3초 이상 지연됐습니다.'
             if self.heading is None or now-self.imu_time > 2:
                 return 'IMU 수신이 2초 이상 지연됐습니다.'
@@ -299,14 +300,15 @@ class Survey:
             if self.clock()<self.stop_until:raise ValueError('중립 명령 전송 중입니다. 잠시 후 다시 시작하세요.')
             if not self.route:
                 raise ValueError('지도에서 웨이포인트를 먼저 지정하세요.')
-            reason = self.prerequisites(navigation)
+            if armed is True and not self.hardware:raise ValueError('실제 추진 인터페이스가 없는 실행입니다.')
+            reason = self.prerequisites(navigation,driving=self.mode=='real' or armed is True)
             if reason:
                 raise ValueError(reason)
             if self.mode == 'real' and armed is not True:
                 raise ValueError('수상 주행 활성화를 확인하세요.')
             if distance(self.position(), self.route[0]) > 2000:
                 raise ValueError('첫 웨이포인트가 현재 위치에서 2km 밖에 있습니다.')
-            self.owner, self.heartbeat, self.armed = owner, self.clock(), self.mode == 'real'
+            self.owner, self.heartbeat, self.armed = owner, self.clock(), armed is True
             self.navigation = navigation
             self.zigzag = RiverZigzag() if navigation == 'river_zigzag' else None
             self.guidance = None
@@ -325,7 +327,7 @@ class Survey:
                     self.armed=False;self.state='stopped'
                     self.reason='기록 파일을 열 수 없어 주행 시작을 취소했습니다.'
                     self.command.update(servo=90.,throttle=0.)
-                    if self.hardware and self.mode=='real':self.stop_until=self.clock()+2
+                    if self.hardware:self.stop_until=self.clock()+2
                     try:self.recorder.finish('failed',self.reason)
                     except OSError:pass
                     raise ValueError(self.reason+' '+str(exc)) from exc
@@ -336,6 +338,7 @@ class Survey:
         self.recorder.meta.update(pattern=self.pattern, area=self.area, plan=self.plan,
             position_input='map_click' if self.mode == 'simulated' else 'gps',navigation=navigation,
             initial_position=self.position().copy(),initial_heading_deg=self.heading,
+            propulsion_enabled=self.armed,
             initial_route=list(self.route),initial_settings=self.settings.copy(),plan_revision=self.plan_revision)
         if self.zigzag:
             self.recorder.meta['river_zigzag']=dict(offset_deg=self.settings['zigzag_deg'],obstacle_m=self.settings['obstacle_m'],trim_each_tail=.2,
@@ -353,7 +356,7 @@ class Survey:
                 self.reason = reason
             self.command.update(throttle=0.0, servo=90.0)
             self.armed = False
-            if (was_armed or neutral) and self.hardware and self.mode=='real':
+            if self.hardware and (was_armed or (neutral and self.mode=='real')):
                 self.stop_until=max(self.stop_until,self.clock()+2)
             if was_active and self.recorder:
                 self.recorder.telemetry('navigation',dict(received_utc=utc(),mono=self.clock(),
@@ -383,8 +386,8 @@ class Survey:
             self.settings['zigzag_deg'],self.settings['obstacle_m'])
         self.command.update(distance=dist,bearing=angle,servo=max(30.,min(150.,
             90.+heading_error(self.guidance['course_deg'],self.heading))),
-            throttle=self.settings['throttle'] if self.mode=='real' else 0.)
-        if self.mode=='simulated':self.command['servo']=90.
+            throttle=self.settings['throttle'] if self.armed else 0.)
+        if not self.armed:self.command['servo']=90.
         if self.recorder and self.guidance['event']:
             self.recorder.event(self.guidance['event'],dict(self.guidance,waypoint=self.index+1,
                 scan_sequence=self.scan['sequence'],scan_stamp=self.scan['stamp']))
@@ -416,7 +419,7 @@ class Survey:
                 self.autonomous_command(p,target,dist,angle)
                 return
             if self.state == 'running':
-                if self.mode == 'simulated':
+                if self.mode == 'simulated' and not self.armed:
                     self.command.update(servo=90.0, throttle=0.0)
                     arrived = dist <= self.settings['radius_m']
                 else:
@@ -450,7 +453,7 @@ class Survey:
 
     def output(self):
         with self.lock:
-            if not self.hardware or self.mode != 'real':
+            if not self.hardware:
                 return None
             if self.armed and self.state in ACTIVE:
                 return self.command.copy()
@@ -481,7 +484,7 @@ class Survey:
                        position_source=self.mode, do_source='sensor', gps_valid=position_ok,
                        gps_age_s=round(age, 4) if age is not None else None,
                        gps_stamp=p['stamp'] if p else None,
-                       heading_deg=self.heading if self.mode == 'real' and now-self.imu_time <= 2 else None,
+                       heading_deg=self.heading if now-self.imu_time <= 2 else None,
                        waypoint=self.index+1, phase=self.state, response_ms=response_ms,
                        sensor=sensor, firmware=firmware, payload_hex=raw_hex)
             self.samples.append(row)
@@ -511,6 +514,8 @@ class Survey:
             scale = [min(values), max(values)] if values else self.do_range
             return dict(mode=self.mode, state=self.state, route=self.route, settings=self.settings,
                         plan_revision=self.plan_revision,
+                        drive_ready_reason=self.prerequisites('waypoint',driving=True),
+                        autonomy_drive_ready_reason=self.prerequisites('river_zigzag',driving=True),
                         speed_m_s=self.speed_m_s if self.mode=='real' and self.gps and now-self.gps['mono']<=3 else None,
                         navigation=self.navigation,guidance=self.guidance,
                         lidar={k:v for k,v in self.scan.items() if k!='mono'} if self.scan else None,

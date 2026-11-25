@@ -65,7 +65,7 @@ class Recorder:
                              units={'do': 'mg/L', 'coordinates': 'WGS84 degrees', 'grid': 'm'},
                              color_scale={'mode': 'cumulative_grid_mean_minmax', 'meaning': 'DO concentration, not pollution class'},
                              positioning='latest host-received position <=2s old; no sensor response-lag correction',
-                             experimental=mode != 'real', basemap='OpenStreetMap online tiles; exports contain coordinates, not raster tiles',
+                             experimental=mode != 'real', basemap='Esri World Imagery online tiles; exports contain coordinates, not raster tiles',
                              samples=0, calibration_changed=False,
                              runtime_context=self.context.copy(),
                              recording={'automatic':True,'screen_capture_required':False,
@@ -229,7 +229,7 @@ class Recorder:
 
 
 def figures(meta, rows, cells, track=()):
-    mode = 'INDOOR TEST / SIMULATED GPS' if meta['experimental'] else 'FIELD GPS'
+    mode = 'MANUAL POSITION / GPS OVERRIDE' if meta['experimental'] else 'FIELD GPS'
     header = '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640"><rect width="1000" height="640" fill="#f5f7f8"/>'
     title = f'<text x="42" y="36" font-family="sans-serif" font-size="20">DO survey — {mode}</text>'
     size=meta['settings']['cell_m']; origin=meta['origin']
@@ -283,7 +283,7 @@ def figures(meta, rows, cells, track=()):
 
 
 def report(meta, rows, map_svg, chart_svg):
-    title='실내 시험 · 가상 GPS + 실제 DO' if meta['experimental'] else '수질 조사 · 실제 GPS + 실제 DO'
+    title='수동 GPS 좌표 · DO 조사' if meta['experimental'] else '수질 조사 · 실제 GPS + 실제 DO'
     if rows and all(r.get('sensor')=='LOCAL_TEST' for r in rows):title='로컬 프로그램 시험 · 생성 데이터'
     safe=json.dumps(meta, ensure_ascii=False, indent=2)
     return f'''<!doctype html><html lang="ko"><meta charset="utf-8"><title>{title}</title>

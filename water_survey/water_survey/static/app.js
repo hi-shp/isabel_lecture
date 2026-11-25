@@ -6,7 +6,8 @@ const liveKeys=keys.filter(k=>k!=='cell_m'),dirtySettings=new Set();
 let livePending={},waypointPending=[],liveSending=false,liveTimer=null,draggingMarker=false;
 const home=[35.1777,129.1198];
 const map=L.map('map',{doubleClickZoom:false}).setView(home,16);
-const tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,crossOrigin:true,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+const tiles=L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:19,maxZoom:22,crossOrigin:true,attribution:'Source: <a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9">Esri</a>, Vantor, Earthstar Geographics, GIS User Community'}).addTo(map);
+tiles.on('load',()=>$('mapStatus').textContent='지도 배경: Esri 위성영상');
 tiles.on('tileerror',()=>$('mapStatus').textContent='지도 배경 연결 대기 · 좌표/격자는 사용 가능');
 L.control.scale({imperial:false}).addTo(map);
 const routeLayer=L.layerGroup().addTo(map),gridLayer=L.layerGroup().addTo(map),areaLayer=L.layerGroup().addTo(map);
@@ -58,6 +59,7 @@ function moveWaypoint(index,position){
 function choose(value){tool=value;corner=null;for(const [id,t] of [['virtual','virtual'],['addRoute','route'],['selectArea','area']])$(id).classList.toggle('selected',value===t);
  $('toolHelp').textContent=value==='virtual'?'지도를 클릭하면 해당 좌표를 발행합니다.':value==='area'?'직사각형의 대각선 두 꼭짓점을 차례로 클릭하세요.':'지도에 클릭한 순서대로 경유지가 추가됩니다.';
 }
+$('armed').onchange=()=>{if(state)render(state);};
 $('virtual').onclick=()=>run(async()=>{if(state?.mode!=='simulated'){if(active())throw Error('위치 입력을 바꾸려면 먼저 정지하세요.');await configure({mode:'simulated'});}choose('virtual');});
 $('resetPosition').onclick=()=>run(async()=>{await api('reset-position');choose('route');notice('지도 입력 위치를 지우고 GPS 수신으로 돌아갑니다.');});
 $('newMap').onclick=()=>run(async()=>{await api('new-map');$('pattern').value='waypoints';$('armed').checked=false;choose('route');map.setView(home,16);notice('새 조사 지도를 열었습니다. 이전 기록은 저장 목록에 남아 있습니다.');history();});
@@ -80,7 +82,7 @@ for(const k of liveKeys){$(k).oninput=()=>queueSetting(k);$(k).onchange=()=>queu
 $('cell_m').onchange=()=>run(configure);
 $('undo').onclick=()=>run(async()=>{route=route.slice(0,-1);await configure();});
 $('clear').onclick=()=>run(async()=>{route=[];area=null;$('pattern').value='waypoints';await configure();});
-function startDrive(action,message){return run(async()=>{if(liveSending||Object.keys(livePending).length||waypointPending.length)throw Error('설정 적용 완료 후 시작하세요.');const generation=driveGeneration;try{await configure();if(generation!==driveGeneration)return;await api(action,{armed:$('armed').checked,control_revision:state.control_revision});if(generation===driveGeneration)notice(message);}catch(e){if(generation===driveGeneration)throw e;}});}
+function startDrive(action,message){return run(async()=>{if(liveSending||Object.keys(livePending).length||waypointPending.length)throw Error('설정 적용 완료 후 시작하세요.');const generation=driveGeneration;try{await configure();if(generation!==driveGeneration)return;await api(action,{armed:$('armed').checked&&state.hardware,control_revision:state.control_revision});if(generation===driveGeneration)notice(message);}catch(e){if(generation===driveGeneration)throw e;}});}
 $('start').onclick=()=>startDrive('start-waypoints','웨이포인트 추종을 시작했습니다.');
 $('startAutonomous').onclick=()=>startDrive('start-autonomous',`중앙 경유지 기준 ±${state.settings.zigzag_deg}° 자율운항을 시작했습니다.`);
 $('stop').onclick=()=>{driveGeneration++;clearTimeout(liveTimer);livePending={};waypointPending=[];dirtySettings.clear();notice('주행 종료 · 중립 명령 전송 중');api('stop').then(s=>notice(s.last_stop?.neutral_published?'주행 종료 · 중립 명령 전송':'주행 종료 · 추진 출력 비활성')).catch(()=>notice('중립 명령 전달을 확인하지 못했습니다. 선박 연결을 확인하세요.',true));};
@@ -100,7 +102,7 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
 setInterval(()=>{const now=performance.now(),seconds=(now-lastMetric)/1000;const ping=rtt!==null&&now-lastPong<5000?`${rtt.toFixed(0)} ms`:'—';$('netStatus').textContent=`왕복 ${ping} · 수신 ${((rx-rxBefore)/seconds/1024).toFixed(1)} KB/s · 송신 ${((tx-txBefore)/seconds/1024).toFixed(1)} KB/s`;$('netStatus').title='브라우저↔선박 애플리케이션 왕복 지연과 실제 대시보드 payload 전송률입니다. 회선 최대 속도가 아닙니다.';rxBefore=rx;txBefore=tx;lastMetric=now;if(ws?.readyState===WebSocket.OPEN){send('heartbeat');send({type:'ping',sent:now});}},1000);
 setInterval(history,15000);
 function render(s){if(state&&((s.control_revision??0)<(state.control_revision??0)||((s.control_revision??0)===(state.control_revision??0)&&(s.plan_revision??0)<(state.plan_revision??0))))return;state=s;route=s.route;area=s.area;const running=active();for(const k of keys)if(!dirtySettings.has(k)&&document.activeElement!==$(k))$(k).value=s.settings[k];first=false;$('pattern').value=s.pattern||'waypoints';
- $('clock').textContent=new Date(s.timestamp).toLocaleTimeString('ko-KR');$('modeBadge').textContent=({running:'조사 중',dwelling:'지점 관측',complete:'조사 완료',stopped:'정지',idle:'조사 대기'}[s.state]||s.state);$('armLabel').hidden=s.mode!=='real';
+ $('clock').textContent=new Date(s.timestamp).toLocaleTimeString('ko-KR');$('modeBadge').textContent=({running:'조사 중',dwelling:'지점 관측',complete:'조사 완료',stopped:'정지',idle:'조사 대기'}[s.state]||s.state);$('armLabel').hidden=!s.hardware;
  const b=s.bringup||{},bstate={active:'실행 중',activating:'시작 중',inactive:'정지',deactivating:'종료 중',failed:'오류',unknown:'확인 중',unmanaged:'외부 실행'};
  $('bringupStatus').textContent=`브링업 ${bstate[b.state]||b.state||'확인 중'} · ${b.detail||''}`;
  $('bringupStart').disabled=running||!b.available||['active','activating','deactivating'].includes(b.state)||s.lifecycle_busy;
@@ -114,7 +116,7 @@ function render(s){if(state&&((s.control_revision??0)<(state.control_revision??0
  $('lidarStatus').textContent=scanFresh?`라이다 정면 1° · ${scan.front_mean_m===null?'히트 없음':scan.front_mean_m.toFixed(2)+' m'} · ${scan.front_hits}개 중 ${scan.front_kept}개 평균 · ≤${s.settings.obstacle_m}m 방향 전환`:'자율운항: 유효한 라이다 정면 1° 측정 대기';
  $('speed').textContent=!Number.isFinite(s.speed_m_s)?'GPS 속도 —':`GPS 속도(추정) ${s.speed_m_s.toFixed(2)} m/s · ${(s.speed_m_s*3.6).toFixed(1)} km/h`;
  $('heading').innerHTML=(s.heading!==null&&s.imu_age_s<2?s.heading.toFixed(1):'—')+'<small>°</small>';$('actuator').textContent=s.armed?`조향 ${s.command.servo.toFixed(0)}° · 추진 ${s.command.throttle.toFixed(0)}%`:'추진 대기';
- $('readiness').textContent=running?'선박에서 조사 및 기록 중':s.ready_reason||'센서 준비 완료 · 경로를 확인하고 시작하세요.';
+ $('readiness').textContent=running?(s.armed?'실제 추진 주행 및 기록 중':'추진 비활성 · 위치와 DO 기록 중'):($('armed').checked?s.drive_ready_reason:s.ready_reason)||'센서 준비 완료 · 경로를 확인하고 시작하세요.';
  if(s.position?.valid){$('coords').textContent=`${s.position.lat.toFixed(7)}, ${s.position.lon.toFixed(7)}`;if(!boat)boat=L.marker([s.position.lat,s.position.lon],{icon:L.divIcon({className:'',html:'<div class="boat-dot"></div>',iconSize:[20,20],iconAnchor:[10,10]})}).addTo(map);else boat.setLatLng([s.position.lat,s.position.lon]);}else{$('coords').textContent='GPS 수신 대기';if(boat){map.removeLayer(boat);boat=null;}}
  const rkey=JSON.stringify([route,s.waypoint,s.state,!!client]);if(!draggingMarker&&lastRoute!==rkey){lastRoute=rkey;routeLayer.clearLayers();if(route.length)L.polyline(route.map(p=>[p.lat,p.lon]),{color:'#536e7b',dashArray:'6 5',weight:2}).addTo(routeLayer);$('waypoints').replaceChildren();if(!route.length){const li=document.createElement('li');li.className='empty';li.textContent='지도에서 경로 또는 범위를 지정하세요.';$('waypoints').append(li);}route.forEach((p,i)=>{if(route.length<150||i===s.waypoint){const marker=L.marker([p.lat,p.lon],{draggable:s.pattern==='waypoints'&&!!client,autoPan:true,icon:L.divIcon({className:'',html:`<div class="wp-dot">${i+1}</div>`,iconSize:[24,24],iconAnchor:[12,12]})}).addTo(routeLayer);marker.on('dragstart',()=>{draggingMarker=true;});marker.on('dragend',()=>{draggingMarker=false;moveWaypoint(i,marker.getLatLng());});} if(route.length>150&&Math.abs(i-s.waypoint)>5)return;const li=document.createElement('li');li.className=i<s.waypoint?'done':i===s.waypoint&&running?'current':'';li.innerHTML=`<span class="num">${i+1}</span><span>${p.lat.toFixed(6)}<br>${p.lon.toFixed(6)}</span>`;$('waypoints').append(li);});}
  const akey=JSON.stringify([s.area,s.plan,s.settings.cell_m]);if(lastArea!==akey){lastArea=akey;areaLayer.clearLayers();if(s.area){const a=s.area;L.rectangle([[a.south,a.west],[a.north,a.east]],{color:'#385d6e',weight:2,fill:false}).addTo(areaLayer);if(s.plan)for(const key of s.plan.targets){const [x,y]=key.split(',').map(Number);const size=s.settings.cell_m;L.rectangle([geo(x*size,y*size,s.plan.origin),geo(Math.min((x+1)*size,s.plan.width),Math.min((y+1)*size,s.plan.height),s.plan.origin)],{color:'#98aeb8',weight:.7,fill:false,interactive:false}).addTo(areaLayer);}}}
@@ -122,8 +124,8 @@ function render(s){if(state&&((s.control_revision??0)<(state.control_revision??0
  for(const id of ['pattern','undo','clear','loadRoute','selectArea','addRoute','newMap','resetPosition','cell_m'])$(id).disabled=running;
  for(const k of liveKeys)$(k).disabled=!client;
  $('virtual').disabled=running&&s.mode!=='simulated';$('undo').disabled=running||s.pattern==='coverage';
- $('start').disabled=running||!client||!route.length||!!s.ready_reason||s.lifecycle_busy;
- $('startAutonomous').disabled=running||!client||!route.length||!!s.autonomy_ready_reason||s.lifecycle_busy;
+ $('start').disabled=running||!client||!route.length||!!($('armed').checked?s.drive_ready_reason:s.ready_reason)||s.lifecycle_busy;
+ $('startAutonomous').disabled=running||!client||!route.length||!!($('armed').checked?s.autonomy_drive_ready_reason:s.autonomy_ready_reason)||s.lifecycle_busy;
  $('startAutonomous').title=s.autonomy_ready_reason||`목표 기준 ±${s.settings.zigzag_deg}° · 0°는 목표 직진`;
  $('export').disabled=!s.mission_id;
  if(running&&s.navigation==='river_zigzag'&&s.guidance&&s.position?.valid){const a=s.guidance.course_deg*Math.PI/180;headingGuide.setLatLngs([[s.position.lat,s.position.lon],geo(10*Math.sin(a),10*Math.cos(a),s.position)]);}else headingGuide.setLatLngs([]);

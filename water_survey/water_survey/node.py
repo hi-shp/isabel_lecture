@@ -313,18 +313,18 @@ def main(args=None):
 
         def neutral_now(self):
             with self.survey.lock:
-                if not self.hardware or self.survey.mode!='real' or self.throttle is None:return False
+                if not self.hardware or self.throttle is None:return False
                 self.publish(dict(servo=90.,throttle=0.))
                 return True
 
         def check_graph(self):
-            if not self.hardware or self.throttle is None:
+            if not self.hardware:
                 return
             competing=False
             for topic in ('/actuator/key/degree','/actuator/thruster/percentage'):
                 if any(info.node_name!=self.get_name() for info in self.get_publishers_info_by_topic(topic)):
                     competing=True
-            self.survey.hardware_ready=not competing and self.throttle.get_subscription_count()>0 and self.steering.get_subscription_count()>0
+            self.survey.hardware_ready=not competing and self.count_subscribers('/actuator/thruster/percentage')>0 and self.count_subscribers('/actuator/key/degree')>0
             self.survey.hardware_reason='다른 추진 제어 프로그램이 실행 중입니다.' if competing else '추진기 수신 노드가 연결되지 않았습니다.'
 
         def tick(self):
@@ -333,14 +333,14 @@ def main(args=None):
 
         def control_tick(self):
             try:
-                # No propulsion publishers exist while using map-click positions.
-                if self.hardware and self.survey.mode == 'real' and self.throttle is None:
+                # Manual GPS can drive hardware only after explicit armed start.
+                wants=self.hardware and (self.survey.mode=='real' or self.survey.armed or self.survey.clock()<self.survey.stop_until)
+                if wants and self.throttle is None:
                     self.steering=self.create_publisher(Float64,'/actuator/key/degree',10)
                     self.throttle=self.create_publisher(Float64,'/actuator/thruster/percentage',10)
-                elif self.survey.mode != 'real' and self.throttle is not None:
+                elif not wants and self.throttle is not None:
                     self.destroy_publisher(self.steering); self.destroy_publisher(self.throttle)
                     self.steering=None; self.throttle=None
-                    self.survey.hardware_ready=False
                 self.survey.tick()
                 cmd=self.survey.output()
                 if cmd is not None:

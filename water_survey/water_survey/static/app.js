@@ -6,11 +6,13 @@ const liveKeys=keys.filter(k=>k!=='cell_m'),dirtySettings=new Set();
 let sensorHealth=null,sensorHealthReceived=0,sensorHealthFileAge=0;
 let livePending={},waypointPending=[],liveSending=false,liveTimer=null,draggingMarker=false;
 const home=[35.1777,129.1198];
-let mapHome=home;
+let mapHome=home,followBoat=false;
 let savedZoom=16;
 try{const stored=localStorage.getItem('isabel.map.zoom'),v=Number(stored);if(stored!==null&&Number.isFinite(v)&&v>=0&&v<=22)savedZoom=v;}catch{}
 const map=L.map('map',{doubleClickZoom:false}).setView(home,savedZoom);
 map.on('zoomend',()=>{try{localStorage.setItem('isabel.map.zoom',String(map.getZoom()));}catch{}});
+function followPosition(enabled){followBoat=enabled;$('center').classList.toggle('selected',enabled);$('center').setAttribute('aria-pressed',String(enabled));}
+map.on('dragstart',()=>followPosition(false));
 const tiles=L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:19,maxZoom:22,crossOrigin:true,attribution:'Source: <a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9">Esri</a>, Vantor, Earthstar Geographics, GIS User Community'}).addTo(map);
 tiles.on('load',()=>$('mapStatus').textContent='지도 배경: Esri 위성영상');
 tiles.on('tileerror',()=>$('mapStatus').textContent='지도 배경 연결 대기 · 좌표/격자는 사용 가능');
@@ -136,7 +138,7 @@ $('start').onclick=()=>startDrive('start-waypoints','웨이포인트 추종을 �
 $('startAutonomous').onclick=()=>startDrive('start-autonomous',`중앙 경유지 기준 ±${state.settings.zigzag_deg}° 자율운항을 시작했습니다.`);
 $('stop').onclick=()=>{driveGeneration++;clearTimeout(liveTimer);livePending={};waypointPending=[];dirtySettings.clear();notice('주행 종료 · 중립 명령 전송 중');api('stop').then(s=>notice(s.last_stop?.neutral_published?'주행 종료 · 중립 명령 전송':'주행 종료 · 추진 출력 비활성')).catch(()=>notice('중립 명령 전달을 확인하지 못했습니다. 선박 연결을 확인하세요.',true));};
 for(const action of ['start','stop'])$('bringup'+(action==='start'?'Start':'Stop')).onclick=()=>run(async()=>{notice(action==='start'?'중립 후 기존 구동을 정리하고 전체 브링업을 다시 시작합니다.':'중립 후 브링업을 종료합니다.');await api(action==='start'?'bringup-restart':'bringup-stop');notice(action==='start'?'전체 브링업 실행 완료':'브링업 종료 완료');});
-$('center').onclick=()=>{if(state?.position?.valid)map.panTo([state.position.lat,state.position.lon]);else if(route.length)map.panTo(L.latLngBounds(route.map(p=>[p.lat,p.lon])).getCenter());};
+$('center').onclick=()=>{followPosition(true);if(state?.position?.valid)map.panTo([state.position.lat,state.position.lon]);};
 function download(url,name){const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();}
 $('export').onclick=()=>{if(state?.mission_id)download('/api/export/'+encodeURIComponent(state.mission_id),'water-survey.zip');};
 $('downloadOld').onclick=()=>{if($('missions').value)download('/api/export/'+encodeURIComponent($('missions').value),'water-survey.zip');};
@@ -151,6 +153,7 @@ function connect(){ws=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
 setInterval(()=>{const now=performance.now(),seconds=(now-lastMetric)/1000;const ping=rtt!==null&&now-lastPong<5000?`${rtt.toFixed(0)} ms`:'—';$('netStatus').textContent=`왕복 ${ping} · 수신 ${((rx-rxBefore)/seconds/1024).toFixed(1)} KB/s · 송신 ${((tx-txBefore)/seconds/1024).toFixed(1)} KB/s`;$('netStatus').title='브라우저↔선박 애플리케이션 왕복 지연과 실제 대시보드 payload 전송률입니다. 회선 최대 속도가 아닙니다.';rxBefore=rx;txBefore=tx;lastMetric=now;if(ws?.readyState===WebSocket.OPEN){send('heartbeat');send({type:'ping',sent:now});}},1000);
 setInterval(history,15000);
 function render(s){if(state&&((s.control_revision??0)<(state.control_revision??0)||((s.control_revision??0)===(state.control_revision??0)&&(s.plan_revision??0)<(state.plan_revision??0))))return;const initial=first;state=s;route=s.route;area=s.area;const running=active();if(initial&&s.position?.valid){mapHome=[s.position.lat,s.position.lon];map.panTo(mapHome,{animate:false});}for(const k of keys)if(!dirtySettings.has(k)&&document.activeElement!==$(k))$(k).value=s.settings[k];first=false;$('pattern').value=s.pattern||'waypoints';
+ if(followBoat&&s.position?.valid)map.panTo([s.position.lat,s.position.lon],{animate:false});
  $('clock').textContent=new Date(s.timestamp).toLocaleTimeString('ko-KR');$('modeBadge').textContent=({running:'조사 중',dwelling:'지점 관측',complete:'조사 완료',stopped:'정지',idle:'조사 대기'}[s.state]||s.state);
  const b=s.bringup||{},bstate={active:'실행 중',activating:'시작 중',inactive:'정지',deactivating:'종료 중',failed:'오류',unknown:'확인 중',unmanaged:'외부 실행'};
  $('bringupStatus').textContent=`브링업 ${bstate[b.state]||b.state||'확인 중'} · ${b.detail||''}`;

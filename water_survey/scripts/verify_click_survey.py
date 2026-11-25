@@ -101,11 +101,14 @@ async def verify(base, output):
                 while time.monotonic()<deadline:
                     value = await state()
                     if value['mission_id']!=mission:raise RuntimeError('Survey changed externally; left untouched')
-                    if value['state']=='complete' or value['waypoint']>index:break
+                    if value.get('route_complete') or value['waypoint']>index:break
                     if value['state']=='stopped':raise RuntimeError(value['reason'])
                     await asyncio.sleep(.2)
                 else:raise RuntimeError('Waypoint did not advance: '+str(value['reason']))
-            assert value['state']=='complete' and value['coverage']=={'total':4,'observed':4}, value
+            assert value.get('route_complete') and value['coverage']=={'total':4,'observed':4}, value
+            # This explicitly invoked verifier closes only its own test mission.
+            # The controller itself keeps a completed route open for recording.
+            value=await session.post('stop')
             assert value['hardware_publish_count']==published, value
             async with http.get(base+'/api/export/'+mission) as response:
                 response.raise_for_status(); (output/'rectangle-click-survey.zip').write_bytes(await response.read())

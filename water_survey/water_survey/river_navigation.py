@@ -50,13 +50,17 @@ def forward_scan(ranges, angle_min, angle_increment, range_min, range_max, yaw_o
 
 
 class RiverZigzag:
-    """Keep the requested offset from the current goal; alternate on obstacles."""
+    """Keep the requested goal offset; alternate only on operator requests."""
     def __init__(self, clock=time.monotonic):
         self.side=1;self.course=None;self.waypoint=None;self.last_scan=None
         self.bank_armed=True;self.switches=0
         self.offset=None;self.threshold=None
         self.clock=clock;self.last_turn=-math.inf
         self.started=False
+        self.pending_turns=0
+
+    def request_turn(self):
+        self.pending_turns+=1
 
     def guide(self, goal_bearing, heading, waypoint, scan,offset_deg=45.,obstacle_m=2.,turn_interval_s=3.):
         event=None
@@ -71,21 +75,13 @@ class RiverZigzag:
         # latched absolute course would widen the offset near the destination.
         self.course=(goal_bearing+offset_deg*self.side)%360
         self.offset=offset_deg;self.threshold=obstacle_m
-        if offset_deg==0:
-            return dict(course_deg=self.course,goal_bearing_deg=goal_bearing,phase='direct',side=self.side,
-                offset_deg=0.,bank_armed=self.bank_armed,bank_switches=self.switches,
-                front_mean_m=scan['front_mean_m'],event=None)
-        if scan['sequence']!=self.last_scan:
-            self.last_scan=scan['sequence']
-            if scan['obstacle'] and self.clock()-self.last_turn>=turn_interval_s:
-                self.side*=-1;self.course=(goal_bearing+offset_deg*self.side)%360
-                self.switches+=1;event='bank_turn'
-                self.last_turn=self.clock()
-        self.bank_armed=self.clock()-self.last_turn>=turn_interval_s
+        if self.pending_turns:
+            if self.pending_turns%2:self.side*=-1
+            self.switches+=self.pending_turns;self.pending_turns=0
+            self.course=(goal_bearing+offset_deg*self.side)%360;event='manual_turn'
         turning=abs(heading_error(self.course,heading))>10
-        phase=('turn_' if turning else 'straight_')+('right' if self.side>0 else 'left')
+        phase='direct' if offset_deg==0 else ('turn_' if turning else 'straight_')+('right' if self.side>0 else 'left')
         return dict(course_deg=self.course,goal_bearing_deg=goal_bearing,phase=phase,
-            side=self.side,offset_deg=offset_deg*self.side,bank_armed=self.bank_armed,
-            turn_interval_s=turn_interval_s,turn_wait_s=max(0.,turn_interval_s-(self.clock()-self.last_turn)),
+            side=self.side,offset_deg=offset_deg*self.side,turn_trigger='keyboard_plus',
             bank_switches=self.switches,
             front_mean_m=scan['front_mean_m'],event=event)

@@ -68,6 +68,7 @@ class Dashboard:
         self.control_revision = 0
         self.lifecycle_busy = False
         self.publish_count=0
+        self.turn_requests=set()
         self.app=web.Application(client_max_size=100_000, middlewares=[self.errors])
         self.app.add_routes([web.get('/',self.index),web.get('/ws',self.websocket),
                              web.get('/api/state',self.state),web.get('/api/missions',self.missions),
@@ -161,7 +162,19 @@ class Dashboard:
             raise ValueError('대시보드 연결이 만료됐습니다. 새로고침하세요.')
         if self.lifecycle_busy and action != 'stop':
             raise ValueError('브링업 요청을 처리하고 있습니다.')
-        if action == 'live-update':
+        if action == 'turn':
+            with self.survey.lock:
+                if data.get('control_revision')!=self.control_revision or data.get('mission_id')!=self.survey.mission_id:
+                    raise ValueError('주행 상태가 바뀌었습니다. 최신 화면에서 다시 전환하세요.')
+                key=data.get('command_id')
+                if not isinstance(key,str) or not 1<=len(key)<=120:raise ValueError('방향 전환 요청 형식 오류')
+                if key not in self.turn_requests:
+                    try:self.survey.manual_turn()
+                    except OSError as exc:
+                        self.pause_motion('방향 전환 기록 저장 복구 대기',recording_fault=True)
+                        raise ValueError('기록 저장 복구를 기다리며 중립으로 대기합니다.') from exc
+                    self.turn_requests.add(key)
+        elif action == 'live-update':
             with self.survey.lock:
                 revision=data.get('control_revision')
                 if type(revision) is not int or revision!=self.control_revision or data.get('mission_id')!=self.survey.mission_id:
@@ -197,6 +210,7 @@ class Dashboard:
                     raise ValueError('종료 전에 전송된 시작 요청입니다. 화면 상태를 확인하고 다시 시작하세요.')
                 navigation='river_zigzag' if action=='start-autonomous' else 'waypoint'
                 self.survey.start(client,data.get('armed') is True,navigation=navigation)
+                self.turn_requests.clear()
         else:
             raise ValueError('알 수 없는 요청')
         return web.json_response(self.data())

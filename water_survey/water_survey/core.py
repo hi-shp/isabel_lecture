@@ -328,9 +328,6 @@ class Survey:
         if navigation == 'river_zigzag':
             if self.pattern != 'waypoints':return '중앙 경유지를 지정한 뒤 자율운항을 시작하세요.'
             if self.heading is None or now-self.imu_time > 2:return '자율운항용 IMU 방향을 기다리고 있습니다.'
-            if not self.scan or now-self.scan['mono'] > 1:return '자율운항용 라이다 스캔이 없거나 1초 이상 지연됐습니다.'
-            if not self.scan['valid'] and self.state not in ACTIVE:
-                return '라이다 정면 1° 구간의 유효 측정을 기다리고 있습니다.'
         return None
 
     def start(self, owner, armed=False, navigation='waypoint'):
@@ -384,10 +381,10 @@ class Survey:
             initial_route=list(self.route),initial_settings=self.settings.copy(),plan_revision=self.plan_revision)
         if self.zigzag:
             self.recorder.meta['river_zigzag']=dict(offset_deg=self.settings['zigzag_deg'],obstacle_m=self.settings['obstacle_m'],trim_each_tail=.2,
-                front_interval_deg=[-.5,.5],switch_on='new_front_obstacle',
+                front_interval_deg=[-.5,.5],switch_on='operator_plus_key',
                 waypoint_transition='intermediate: two fresh positions inside radius or past cross-section; final: inside radius only',
-                turn_interval_s=self.settings['turn_interval_s'],
-                invalid_front='hold usable scan up to 1s, then neutral until fresh valid scan; mission stays open',
+                turn_interval_s=None,lidar_required=False,
+                invalid_front='record sensor state only; operator controls direction with plus key',
                 termination='operator stop only; destination holds neutral and continues recording')
         self.recorder.save_meta()
 
@@ -422,16 +419,7 @@ class Survey:
 
     def autonomous_command(self, p, target, dist, angle):
         """Centreline points guide continuous river progress, without a dwell."""
-        scan=self.navigation_scan()
-        waiting=scan is None
-        if waiting!=self.lidar_waiting:
-            self.lidar_waiting=waiting
-            if self.recorder:self.recorder.event('lidar_wait' if waiting else 'lidar_resumed',
-                dict(scan_sequence=self.scan['sequence'],waypoint=self.index+1))
-        if waiting:
-            self.pause_motion('라이다 정면 측정 복구 대기')
-            if self.guidance:self.guidance=dict(self.guidance,phase='waiting_lidar',event=None)
-            return
+        scan=self.scan or dict(sequence=0,stamp=None,front_mean_m=None,obstacle=False)
         gx,gy=xy(target,self.leg_origin);px,py=xy(p,self.leg_origin)
         passed=(gx*gx+gy*gy>=1 and px*gx+py*gy>=gx*gx+gy*gy)
         reached=dist<=self.settings['radius_m'] or (passed and self.index<len(self.route)-1)
@@ -458,6 +446,14 @@ class Survey:
         if self.recorder and self.guidance['event']:
             self.recorder.event(self.guidance['event'],dict(self.guidance,waypoint=self.index+1,
                 scan_sequence=scan['sequence'],scan_stamp=scan['stamp']))
+
+    def manual_turn(self):
+        with self.lock:
+            if self.state not in ACTIVE or self.navigation!='river_zigzag' or self.route_complete:
+                raise ValueError('자율운항 주행 중에 방향을 전환할 수 있습니다.')
+            if self.recorder:self.recorder.event('plus_key',dict(waypoint=self.index+1))
+            self.zigzag.request_turn()
+            self.tick()
 
     def tick(self):
         with self.lock:

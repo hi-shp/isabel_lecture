@@ -34,7 +34,7 @@ class LiveControlTests(unittest.TestCase):
         self.s.start('owner',True,'river_zigzag');self.s.tick();self.fresh()
         mission=self.s.mission_id;count=self.s.count;cells=self.s.cells.copy()
         self.update({'throttle':27,'zigzag_deg':60,'radius_m':5,'dwell_s':3,'turn_interval_s':5})
-        self.assertEqual(self.s.guidance['turn_interval_s'],5)
+        self.assertEqual(self.s.guidance['turn_trigger'],'keyboard_plus')
         self.assertEqual(self.s.guidance['course_deg'],60)
         self.assertAlmostEqual(self.s.command['servo'],105)
         self.assertEqual(self.s.output()['throttle'],27)
@@ -52,7 +52,8 @@ class LiveControlTests(unittest.TestCase):
         self.fresh(front=3);self.s.start('owner',True,'river_zigzag');self.s.tick()
         self.assertEqual(self.s.guidance['bank_switches'],0)
         self.update({'obstacle_m':4})
-        self.assertTrue(self.s.scan['obstacle']);self.assertEqual(self.s.guidance['bank_switches'],1)
+        self.assertTrue(self.s.scan['obstacle']);self.assertEqual(self.s.guidance['bank_switches'],0)
+        self.s.manual_turn()
         self.assertEqual(self.s.guidance['course_deg'],315)
 
     def test_zero_angle_continuously_tracks_the_goal_instead_of_holding_a_leg(self):

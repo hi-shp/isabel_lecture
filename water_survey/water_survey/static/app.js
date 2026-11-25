@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let state=null,client=null,ws=null,tool='route',route=[],area=null,corner=null,busy=false,first=true,driveGeneration=0;
-const keys=['cell_m','dwell_s','radius_m','throttle','obstacle_m','zigzag_deg','turn_interval_s'];
+const keys=['cell_m','dwell_s','radius_m','throttle','zigzag_deg'];
 const liveKeys=keys.filter(k=>k!=='cell_m'),dirtySettings=new Set();
 let sensorHealth=null,sensorHealthReceived=0,sensorHealthFileAge=0;
 let livePending={},waypointPending=[],liveSending=false,liveTimer=null,draggingMarker=false;
@@ -136,6 +136,18 @@ $('clear').onclick=()=>run(async()=>{route=[];area=null;$('pattern').value='wayp
 function startDrive(action,message){return run(async()=>{if(liveSending||Object.keys(livePending).length||waypointPending.length)throw Error('설정 적용 완료 후 시작하세요.');const generation=driveGeneration;try{await configure();if(generation!==driveGeneration)return;await api(action,{armed:state.hardware,control_revision:state.control_revision});if(generation===driveGeneration)notice(message);}catch(e){if(generation===driveGeneration)throw e;}});}
 $('start').onclick=()=>startDrive('start-waypoints','웨이포인트 추종을 시작했습니다.');
 $('startAutonomous').onclick=()=>startDrive('start-autonomous',`중앙 경유지 기준 ±${state.settings.zigzag_deg}° 자율운항을 시작했습니다.`);
+let turnSequence=0;
+function turnBoat(){
+ if(!active()||state.navigation!=='river_zigzag'||state.route_complete||!client)return;
+ api('turn',{mission_id:state.mission_id,control_revision:state.control_revision,command_id:client+':'+(++turnSequence)}).catch(e=>notice(e.message,true));
+}
+$('turn').onclick=turnBoat;
+document.addEventListener('keydown',e=>{
+ if((e.key!=='+'&&e.code!=='NumpadAdd')||e.repeat||e.ctrlKey||e.metaKey||e.altKey)return;
+ if(e.target.closest?.('input,textarea,select,[contenteditable="true"]'))return;
+ if(!active()||state.navigation!=='river_zigzag'||state.route_complete)return;
+ e.preventDefault();turnBoat();
+});
 $('stop').onclick=()=>{driveGeneration++;clearTimeout(liveTimer);livePending={};waypointPending=[];dirtySettings.clear();notice('주행 종료 · 중립 명령 전송 중');api('stop').then(s=>notice(s.last_stop?.neutral_published?'주행 종료 · 중립 명령 전송':'주행 종료 · 추진 출력 비활성')).catch(()=>notice('중립 명령 전달을 확인하지 못했습니다. 선박 연결을 확인하세요.',true));};
 for(const action of ['start','stop'])$('bringup'+(action==='start'?'Start':'Stop')).onclick=()=>run(async()=>{notice(action==='start'?'중립 후 기존 구동을 정리하고 전체 브링업을 다시 시작합니다.':'중립 후 브링업을 종료합니다.');await api(action==='start'?'bringup-restart':'bringup-stop');notice(action==='start'?'전체 브링업 실행 완료':'브링업 종료 완료');});
 $('center').onclick=()=>{followPosition(true);if(state?.position?.valid)map.panTo([state.position.lat,state.position.lon]);};
@@ -179,6 +191,7 @@ function render(s){if(state&&((s.control_revision??0)<(state.control_revision??0
  $('start').disabled=running||!client||!route.length||!!(s.hardware?s.drive_ready_reason:s.ready_reason)||s.lifecycle_busy;
  $('startAutonomous').disabled=running||!client||!route.length||!!(s.hardware?s.autonomy_drive_ready_reason:s.autonomy_ready_reason)||s.lifecycle_busy;
  $('startAutonomous').title=s.autonomy_ready_reason||`목표 기준 ±${s.settings.zigzag_deg}° · 0°는 목표 직진`;
+ $('turn').disabled=!running||s.navigation!=='river_zigzag'||s.route_complete||!client||s.lifecycle_busy;
  $('export').disabled=!s.mission_id;
  if(running&&s.navigation==='river_zigzag'&&s.guidance&&s.position?.valid){const a=s.guidance.course_deg*Math.PI/180;headingGuide.setLatLngs([[s.position.lat,s.position.lon],geo(10*Math.sin(a),10*Math.cos(a),s.position)]);}else headingGuide.setLatLngs([]);
  $('mission').textContent=s.mission_id||'저장 중인 조사 없음';$('hardwareCount').textContent=`추진 명령 발행 ${s.hardware_publish_count}회`;

@@ -130,6 +130,14 @@ class Dashboard:
             self.last_stop=dict(utc=utc(),neutral_requested=True,neutral_published=published,
                 actuator_acknowledged=False,publish_error=publish_error,record_error=record_error)
 
+    def pause_motion(self, reason, recording_fault=False):
+        with self.survey.lock:
+            if self.survey.state not in ACTIVE:return
+            if recording_fault:self.survey.fault_reason=reason
+            self.survey.pause_motion(reason)
+            with contextlib.suppress(Exception):
+                if self.neutral_publish:self.neutral_publish()
+
     async def state(self,request):
         return web.json_response(self.data())
 
@@ -160,8 +168,8 @@ class Dashboard:
                     raise ValueError('주행 상태가 바뀌었습니다. 최신 상태에서 다시 변경하세요.')
                 try:self.survey.live_update(data.get('settings',{}),data.get('waypoint'),data.get('plan_revision'))
                 except OSError as exc:
-                    self.end_motion('설정 변경 기록 저장 실패로 정지')
-                    raise ValueError('기록 저장 실패로 주행을 종료했습니다.') from exc
+                    self.pause_motion('설정 변경 기록 저장 복구 대기',recording_fault=True)
+                    raise ValueError('기록 저장 복구를 기다리며 중립으로 대기합니다.') from exc
         elif action == 'configure':
             self.survey.configure(data['mode'],data['route'],data.get('settings',{}),
                                   data.get('pattern', 'waypoints'),data.get('area'))
@@ -173,15 +181,13 @@ class Dashboard:
             self.survey.reset_position()
         elif action == 'new-map':
             self.survey.new_map()
-        elif action in ('bringup-start', 'bringup-stop'):
-            if action == 'bringup-start' and self.survey.state in ('running', 'dwelling'):
-                raise ValueError('조사를 정지한 뒤 브링업을 시작하세요.')
+        elif action in ('bringup-start', 'bringup-stop','bringup-restart'):
             self.lifecycle_busy = True
             try:
-                if action == 'bringup-stop':
-                    self.end_motion('브링업 종료 요청')
-                    await asyncio.sleep(2.2)  # Keep the base alive until zero-throttle messages are sent.
-                await self.bringup.command(action.split('-')[1])
+                self.end_motion('브링업 종료 요청' if action=='bringup-stop' else '전체 브링업 재시작 요청')
+                await asyncio.sleep(2.2)
+                await self.bringup.command('stop' if action=='bringup-stop' else 'restart')
+                if action!='bringup-stop':self.survey.begin_heading_zero()
             finally:
                 self.lifecycle_busy = False
         elif action in ('start','start-waypoints','start-autonomous'):
@@ -217,8 +223,10 @@ class Dashboard:
 
     async def broadcast(self):
         while True:
-            try:await asyncio.to_thread(self.recorder.sync)
-            except OSError as exc:self.end_motion('기록 저장 오류로 주행 종료: '+str(exc)[:120])
+            try:
+                await asyncio.to_thread(self.recorder.sync)
+                with self.survey.lock:self.survey.fault_reason=None
+            except OSError as exc:self.pause_motion('기록 저장 복구 대기: '+str(exc)[:120],recording_fault=True)
             for key,ws in list(self.clients.items()):
                 try:
                     await asyncio.wait_for(ws.send_json({'type':'state','data':self.data()}),1)
@@ -250,6 +258,9 @@ def main(args=None):
                 heading_convention='degrees clockwise from north; IMU ENU yaw converted as (90-yaw)%360',
                 allow_hardware=self.hardware)
             self.survey=Survey(self.hardware,recorder=self.recorder)
+            self.heading_reference_file=self.recorder.root/'heading-reference.json'
+            try:self.survey.heading_reference_deg=float(json.loads(self.heading_reference_file.read_text())['reference_deg'])
+            except (OSError,ValueError,KeyError,TypeError):self.survey.begin_heading_zero()
             self.survey.mode=self.get_parameter('default_mode').value
             self.manual_fix=self.create_publisher(NavSatFix,'/water_survey/manual_fix',10)
             self.dashboard=Dashboard(self.survey,self.recorder,Path(__file__).parent/'static',
@@ -290,7 +301,14 @@ def main(args=None):
             if msg.orientation_covariance[0] == -1 or not all(math.isfinite(v) for v in vals) or not .8<=norm<=1.2:
                 return
             yaw=math.degrees(math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z)))
-            self.survey.imu_update((90-yaw)%360,self.stamp(msg))
+            with self.survey.lock:
+                pending=self.survey.heading_reference_deg is None
+                self.survey.imu_update((90-yaw)%360,self.stamp(msg))
+                if pending:
+                    temp=self.heading_reference_file.with_suffix('.tmp')
+                    temp.write_text(json.dumps(dict(reference_deg=self.survey.heading_reference_deg,utc=utc(),
+                        convention='operator declares startup direction north')),encoding='utf-8')
+                    temp.replace(self.heading_reference_file)
 
         def scan(self,msg):
             self.record_message('lidar_raw',msg)
@@ -309,7 +327,7 @@ def main(args=None):
                     try:self.recorder.telemetry(kind,dict(received_utc=utc(),
                         received_monotonic_ns=time.monotonic_ns(),message=message_data(msg)))
                     except OSError as exc:
-                        self.dashboard.end_motion('기록 저장 오류로 주행 종료: '+str(exc)[:120])
+                        self.dashboard.pause_motion('기록 저장 복구 대기: '+str(exc)[:120],recording_fault=True)
 
         def neutral_now(self):
             with self.survey.lock:
@@ -347,7 +365,7 @@ def main(args=None):
                     self.publish(cmd)
             except Exception as exc:
                 self.get_logger().error(str(exc))
-                self.dashboard.end_motion('제어 처리 오류로 정지')
+                self.dashboard.pause_motion('제어 처리 복구 대기: '+str(exc)[:120])
 
         def publish(self,cmd):
             self.throttle.publish(Float64(data=float(cmd['throttle'])))

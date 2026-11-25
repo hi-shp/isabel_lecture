@@ -31,6 +31,14 @@ class ManualPropulsionTests(unittest.TestCase):
         self.assertFalse(self.s.armed);self.assertIsNone(self.s.output())
     def test_lost_imu_stops_real_output_even_when_position_is_manual(self):
         self.s.start('owner',True);self.s.tick();self.now+=2.1;self.s.tick()
-        self.assertEqual(self.s.state,'stopped');self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.state,'running');self.assertEqual(self.s.output()['throttle'],0)
+        self.s.imu_update(0,utc());self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],20)
+
+    def test_zero_throttle_keeps_imu_steering_available_without_propulsion(self):
+        self.s.live_update({'throttle':0},None,self.s.plan_revision)
+        self.s.start('owner',True);self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.output()['servo'],150)
 
 if __name__=='__main__':unittest.main()

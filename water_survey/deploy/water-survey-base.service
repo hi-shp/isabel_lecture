@@ -10,9 +10,11 @@ User=ubuntu
 Environment=ROS_DOMAIN_ID=0
 Environment=PYTHONUNBUFFERED=1
 WorkingDirectory=/home/ubuntu
-ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && source /home/ubuntu/uros_ws/install/setup.bash && source /home/ubuntu/water_survey_ws/current_release/install/setup.bash && exec ros2 launch mechaship_bringup mechaship_bringup.launch.py survey_dashboard:=false mechaship_imu_parameter:=/home/ubuntu/water_survey_ws/current_release/install/water_survey/share/water_survey/config/mechaship_imu.yaml'
+ExecStartPre=/usr/bin/python3 /home/ubuntu/water_survey_ws/current_release/install/water_survey/share/water_survey/scripts/stop_duplicate_bringup.py
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && source /home/ubuntu/uros_ws/install/setup.bash && source /home/ubuntu/water_survey_ws/current_release/install/setup.bash && exec ros2 launch mechaship_bringup mechaship_bringup.launch.py survey_dashboard:=false mechaship_imu_parameter:=/home/ubuntu/water_survey_ws/current_release/install/water_survey/share/water_survey/config/mechaship_imu.yaml ntrip_parameter:=/home/ubuntu/.config/isabel/ntrip.yaml ntrip_fix_topic:=/water_survey/ntrip_fix'
 KillSignal=SIGINT
-TimeoutStopSec=25
+KillMode=control-group
+TimeoutStopSec=8
 Restart=on-failure
 RestartSec=3
 

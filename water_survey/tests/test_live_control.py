@@ -33,7 +33,8 @@ class LiveControlTests(unittest.TestCase):
     def test_throttle_angle_and_radius_apply_without_resetting_data_or_arming(self):
         self.s.start('owner',True,'river_zigzag');self.s.tick();self.fresh()
         mission=self.s.mission_id;count=self.s.count;cells=self.s.cells.copy()
-        self.update({'throttle':27,'zigzag_deg':60,'radius_m':5,'dwell_s':3})
+        self.update({'throttle':27,'zigzag_deg':60,'radius_m':5,'dwell_s':3,'turn_interval_s':5})
+        self.assertEqual(self.s.guidance['turn_interval_s'],5)
         self.assertEqual(self.s.guidance['course_deg'],60)
         self.assertAlmostEqual(self.s.command['servo'],105)
         self.assertEqual(self.s.output()['throttle'],27)

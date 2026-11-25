@@ -6,3 +6,4 @@ install/
 log/
 water_survey_data/
 *.tmp
+water_survey/water_survey/static/sensor-health.json

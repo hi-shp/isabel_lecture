@@ -52,18 +52,41 @@ class RiverGuideTests(unittest.TestCase):
             value=guide.guide(20,45,0,self.observation(sequence,False))
             self.assertEqual(value['course_deg'],45);self.assertEqual(value['bank_switches'],0)
 
-    def test_alternate_only_after_new_bank_event_and_clear_alignment(self):
-        guide=RiverZigzag();guide.guide(0,45,0,self.observation(1,False))
+    def test_alternate_only_on_obstacle_after_interval_without_extra_conditions(self):
+        guide=RiverZigzag(clock=lambda:0);guide.guide(0,45,0,self.observation(1,False))
         value=guide.guide(0,45,0,self.observation(2,True))
         self.assertEqual(value['course_deg'],315);self.assertEqual(value['side'],-1)
         for sequence in (2,3,4):
             value=guide.guide(0,315,0,self.observation(sequence,True))
             self.assertEqual(value['bank_switches'],1)
-        guide.guide(0,0,0,self.observation(5,False))  # Not aligned: still not armed.
+        guide.guide(0,0,0,self.observation(5,False))
         self.assertEqual(guide.guide(0,315,0,self.observation(6,True))['bank_switches'],1)
-        self.assertTrue(guide.guide(0,315,0,self.observation(7,False))['bank_armed'])
-        value=guide.guide(0,315,0,self.observation(8,True))
+        self.assertFalse(guide.guide(0,315,0,self.observation(7,False))['bank_armed'])
+        guide.clock=lambda:3
+        value=guide.guide(0,0,0,self.observation(8,True))
         self.assertEqual(value['course_deg'],45);self.assertEqual(value['bank_switches'],2)
+
+    def test_repeated_opposite_banks_respect_live_interval_and_keep_turning(self):
+        now=[0.];guide=RiverZigzag(clock=lambda:now[0]);sequence=0
+        def obs(blocked,heading):
+            nonlocal sequence
+            sequence+=1
+            return guide.guide(0,heading,0,self.observation(sequence,blocked),turn_interval_s=3)
+        for turn in range(1,11):
+            incoming=45 if turn%2 else 315
+            now[0]=(turn-1)*3
+            v=obs(True,incoming)
+            self.assertEqual(v['bank_switches'],turn)
+            self.assertEqual(v['course_deg'],315 if turn%2 else 45)
+            # No clear frame or heading alignment is required for the next turn.
+            now[0]+=.2
+            for _ in range(3):
+                self.assertEqual(obs(True,0)['bank_switches'],turn)
+        now[0]+=1
+        sequence+=1
+        # An edited shorter interval applies to the very next fresh scan.
+        v=guide.guide(0,45,0,self.observation(sequence,True),turn_interval_s=.5)
+        self.assertEqual(v['bank_switches'],11)
 
 
 class RiverSurveyTests(unittest.TestCase):
@@ -83,7 +106,7 @@ class RiverSurveyTests(unittest.TestCase):
         self.s.imu_update(90,utc());self.s.add_do(8.4,utc(),utc(),1,'fixture','LOCAL_TEST','fixture')
         if scan:self.s.scan_update(forward_scan([10.]*10,-.004,.001,.1,100),str(self.now))
 
-    def test_centreline_progress_is_continuous_then_neutral_at_end(self):
+    def test_centreline_progress_then_destination_holds_without_finishing_recording(self):
         self.s.start('owner',True,'river_zigzag');self.s.tick()
         self.assertAlmostEqual(self.s.guidance['course_deg'],135,places=3)
         self.assertEqual(self.s.output()['throttle'],20)
@@ -91,7 +114,11 @@ class RiverSurveyTests(unittest.TestCase):
         self.assertEqual(self.s.index,1);self.assertEqual(self.s.state,'running')
         self.assertEqual(self.s.output()['throttle'],20)  # No dwell at a centreline marker.
         for _ in range(2):self.fresh(22,5);self.s.tick()
-        self.assertEqual(self.s.state,'complete');self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.state,'running');self.assertEqual(self.s.output()['throttle'],20)
+        for _ in range(2):self.fresh(20,0);self.s.tick()
+        self.assertTrue(self.s.route_complete);self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.state,'running');self.assertIsNotNone(self.recorder.file)
+        self.s.stop()
         bundle=zipfile.ZipFile(io.BytesIO(self.recorder.bundle(self.s.mission_id)))
         meta=json.loads(bundle.read('mission.json'))
         self.assertEqual(meta['navigation'],'river_zigzag');self.assertEqual(meta['river_zigzag']['obstacle_m'],2)
@@ -103,10 +130,39 @@ class RiverSurveyTests(unittest.TestCase):
         self.s.start('owner',True);self.s.tick()
         self.assertEqual(self.s.state,'running');self.assertAlmostEqual(self.s.command['servo'],90,places=3)
 
-    def test_lidar_loss_stops_autonomy_and_sends_zero(self):
+    def test_lidar_loss_pauses_without_ending_and_recovers_on_fresh_scan(self):
         self.s.start('owner',True,'river_zigzag');self.now+=1.1;self.s.tick()
-        self.assertEqual(self.s.state,'stopped');self.assertIn('라이다',self.s.reason)
-        self.assertEqual(self.s.output(),dict(servo=90.,throttle=0.))
+        self.assertEqual(self.s.state,'running');self.assertIn('라이다',self.s.reason)
+        self.assertEqual(self.s.output()['throttle'],0);self.assertEqual(self.s.output()['servo'],90)
+        self.assertTrue(self.s.armed);self.assertIsNotNone(self.recorder.file)
+        self.fresh(0,0);self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],20);self.assertIsNone(self.s.pause_reason)
+
+    def test_missing_front_frame_holds_then_neutral_wait_and_same_mission_resumes(self):
+        self.s.start('owner',True,'river_zigzag');self.s.tick();mission=self.s.mission_id
+        self.now+=.1
+        invalid=forward_scan([math.nan]*10,-.004,.001,.1,100)
+        self.s.scan_update(invalid,str(self.now));self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],20)
+        for _ in range(15):
+            self.now+=.1;self.s.imu_update(90,utc())
+            self.s.scan_update(invalid,str(self.now));self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.state,'running');self.assertTrue(self.s.armed)
+        self.assertEqual(self.s.guidance['phase'],'waiting_lidar')
+        self.fresh(0,0);self.s.tick()
+        self.assertEqual(self.s.output()['throttle'],20);self.assertEqual(self.s.mission_id,mission)
+        self.s.stop();self.fresh(0,0);self.s.tick()
+        self.assertFalse(self.s.armed);self.assertEqual(self.s.output()['throttle'],0)
+
+    def test_held_leg_steering_corrects_both_sides_of_the_imu_heading(self):
+        self.s.start('owner',True,'river_zigzag');self.s.tick()
+        course=self.s.guidance['course_deg']
+        self.s.imu_update(course-20,utc());self.s.tick()
+        self.assertAlmostEqual(self.s.command['servo'],110)
+        self.s.imu_update(course+20,utc());self.s.tick()
+        self.assertAlmostEqual(self.s.command['servo'],70)
+        self.assertEqual(self.s.guidance['course_deg'],course)
 
     def test_click_mode_never_enables_propulsion_with_new_navigation(self):
         self.s.configure('simulated',[latlon(10,0,self.origin)],{})

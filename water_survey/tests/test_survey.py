@@ -49,7 +49,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(self.s.state,'dwelling'); self.assertEqual(self.s.index,i)
             self.clock.advance(3.1); self.sample(); self.s.tick()
             self.assertIsNone(self.s.output())
-        self.assertEqual(self.s.state,'complete'); self.assertIsNone(self.s.gps)
+        self.assertEqual(self.s.state,'dwelling');self.assertTrue(self.s.route_complete); self.assertIsNone(self.s.gps)
 
     def test_coverage_visits_every_cell_and_requires_new_measurement(self):
         ne=latlon(9,9,self.p)
@@ -62,7 +62,7 @@ class CoreTests(unittest.TestCase):
         for target in self.s.route:
             self.s.set_virtual(**target); self.sample(); self.s.tick()
             self.clock.advance(3.1); self.sample(); self.s.tick()
-        self.assertEqual(self.s.state,'complete')
+        self.assertEqual(self.s.state,'dwelling');self.assertTrue(self.s.route_complete)
         self.assertEqual(self.s.snapshot()['coverage'],dict(total=4,observed=4))
         self.assertIsNone(self.s.output())
         z=zipfile.ZipFile(io.BytesIO(self.rec.bundle(self.s.mission_id)))
@@ -111,12 +111,12 @@ class CoreTests(unittest.TestCase):
     def test_gps_invalid_or_stale_stops(self):
         self.prepare_real(); self.s.start('o',True)
         self.s.gps_update(0,0,False,utc()); self.s.tick()
-        self.assertEqual(self.s.state,'stopped'); self.assertEqual(self.s.output()['throttle'],0)
+        self.assertEqual(self.s.state,'running'); self.assertEqual(self.s.output()['throttle'],0)
 
     def test_imu_stale_stops(self):
         self.prepare_real(); self.s.start('o',True)
         self.clock.advance(2.1); self.s.pulse('o'); self.s.tick()
-        self.assertEqual(self.s.state,'stopped'); self.assertIn('IMU',self.s.reason)
+        self.assertEqual(self.s.state,'running'); self.assertIn('IMU',self.s.reason)
 
     def test_no_browser_heartbeat_required(self):
         self.s.configure('simulated',[self.p],{}); self.s.set_virtual(**self.p); self.sample(); self.s.start('a')
@@ -126,7 +126,7 @@ class CoreTests(unittest.TestCase):
     def test_do_stale_stops(self):
         self.s.configure('simulated',[self.p],{}); self.s.set_virtual(**self.p); self.sample(); self.s.start('a')
         self.clock.advance(5.1); self.s.pulse('a'); self.s.tick()
-        self.assertEqual(self.s.state,'stopped'); self.assertIn('DO',self.s.reason)
+        self.assertEqual(self.s.state,'running'); self.assertIn('DO',self.s.reason)
 
     def test_old_gps_is_not_mapped(self):
         self.prepare_real(); self.s.start('o',True)

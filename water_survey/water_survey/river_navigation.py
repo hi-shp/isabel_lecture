@@ -1,5 +1,6 @@
 """River-centre guidance with live-editable obstacle-triggered zigzag legs."""
 import math
+import time
 
 
 def heading_error(target, current):
@@ -49,17 +50,14 @@ def forward_scan(ranges, angle_min, angle_increment, range_min, range_max, yaw_o
 
 
 class RiverZigzag:
-    """Hold a straight leg until a NEW front observation triggers the other side.
-
-    No timed/distance-based switching and no waypoint-direction straight segment.
-    A bank event is rearmed only after alignment and a new unobstructed scan.
-    """
-    def __init__(self):
+    """Hold each leg; switch on a front obstacle after the configured interval."""
+    def __init__(self, clock=time.monotonic):
         self.side=1;self.course=None;self.waypoint=None;self.last_scan=None
         self.bank_armed=True;self.switches=0
         self.offset=None;self.threshold=None
+        self.clock=clock;self.last_turn=-math.inf
 
-    def guide(self, goal_bearing, heading, waypoint, scan,offset_deg=45.,obstacle_m=2.):
+    def guide(self, goal_bearing, heading, waypoint, scan,offset_deg=45.,obstacle_m=2.,turn_interval_s=3.):
         event=None
         if self.threshold!=obstacle_m:self.last_scan=None
         if self.course is None or self.waypoint!=waypoint or self.offset!=offset_deg or offset_deg==0:
@@ -71,14 +69,15 @@ class RiverZigzag:
                 front_mean_m=scan['front_mean_m'],event=None)
         if scan['sequence']!=self.last_scan:
             self.last_scan=scan['sequence']
-            if self.bank_armed and scan['obstacle']:
+            if scan['obstacle'] and self.clock()-self.last_turn>=turn_interval_s:
                 self.side*=-1;self.course=(goal_bearing+offset_deg*self.side)%360
-                self.bank_armed=False;self.switches+=1;event='bank_turn'
-            elif (not self.bank_armed and not scan['obstacle'] and
-                  abs(heading_error(self.course,heading))<=10):
-                self.bank_armed=True;event='bank_rearmed'
+                self.switches+=1;event='bank_turn'
+                self.last_turn=self.clock()
+        self.bank_armed=self.clock()-self.last_turn>=turn_interval_s
         turning=abs(heading_error(self.course,heading))>10
         phase=('turn_' if turning else 'straight_')+('right' if self.side>0 else 'left')
         return dict(course_deg=self.course,goal_bearing_deg=goal_bearing,phase=phase,
             side=self.side,offset_deg=offset_deg*self.side,bank_armed=self.bank_armed,
-            bank_switches=self.switches,front_mean_m=scan['front_mean_m'],event=event)
+            turn_interval_s=turn_interval_s,turn_wait_s=max(0.,turn_interval_s-(self.clock()-self.last_turn)),
+            bank_switches=self.switches,
+            front_mean_m=scan['front_mean_m'],event=event)

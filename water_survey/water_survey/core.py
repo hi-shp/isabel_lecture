@@ -7,8 +7,8 @@ from .river_navigation import RiverZigzag, heading_error
 
 R = 6378137.0
 ACTIVE = ('running', 'dwelling')
-SETTING_BOUNDS=dict(cell_m=(1,100),radius_m=(1,20),dwell_s=(3,120),throttle=(1,30),
-                    obstacle_m=(.2,30),zigzag_deg=(0,80))
+SETTING_BOUNDS=dict(cell_m=(1,100),radius_m=(1,20),dwell_s=(3,120),throttle=(0,30),
+                    obstacle_m=(.2,30),zigzag_deg=(0,80),turn_interval_s=(0,120))
 LIVE_SETTINGS=set(SETTING_BOUNDS)-{'cell_m'}
 
 
@@ -61,8 +61,8 @@ def coverage_plan(area, size):
     if ne['lat'] <= sw['lat'] or ne['lon'] <= sw['lon']:
         raise ValueError('직사각형의 서로 다른 두 꼭짓점을 지정하세요.')
     w, h = xy(ne, sw)
-    if min(w, h) < .5 or distance(sw, ne) > 2000:
-        raise ValueError('조사 범위는 폭·높이 0.5m 이상, 대각선 2km 이내입니다.')
+    if min(w, h) < .5:
+        raise ValueError('조사 범위의 폭·높이는 0.5m 이상이어야 합니다.')
     cols, rows = math.ceil(w/size-1e-8), math.ceil(h/size-1e-8)
     if cols*rows > 2500:
         raise ValueError('최대 2500칸입니다. 범위를 줄이거나 격자를 크게 설정하세요.')
@@ -81,7 +81,8 @@ class Survey:
         self.mode = 'real' if hardware else 'simulated'
         self.state = 'idle'
         self.route = []
-        self.settings = dict(cell_m=5.0, radius_m=3.0, dwell_s=10.0, throttle=20.0,obstacle_m=2.,zigzag_deg=45.)
+        self.settings = dict(cell_m=5.0, radius_m=3.0, dwell_s=10.0, throttle=20.0,
+                             obstacle_m=2.,zigzag_deg=45.,turn_interval_s=3.)
         self.plan_revision=0
         self.speed_m_s=None
         self.pattern, self.area, self.plan = 'waypoints', None, None
@@ -89,6 +90,8 @@ class Survey:
         self.gps = None
         self.sim = None
         self.heading = None
+        self.raw_heading=None
+        self.heading_reference_deg=0.
         self.imu_time = -1e9
         self.do = None
         self.do_status = '센서 연결 대기'
@@ -105,6 +108,9 @@ class Survey:
         self.mapped = 0
         self.do_range = None
         self.reason = ''
+        self.pause_reason = None
+        self.fault_reason = None
+        self.route_complete = False
         self.dwell_start = None
         self.arrivals = 0
         self.arrival_gps_time = None
@@ -119,6 +125,8 @@ class Survey:
         self.guidance = None
         self.leg_origin = None
         self.scan = None
+        self.last_valid_scan = None
+        self.lidar_waiting = False
         self.scan_sequence = 0
 
     def position(self):
@@ -146,9 +154,16 @@ class Survey:
         if not math.isfinite(heading):
             return
         with self.lock:
-            self.heading, self.imu_time = heading % 360, self.clock()
+            self.raw_heading=heading%360
+            if self.heading_reference_deg is None:self.heading_reference_deg=self.raw_heading
+            self.heading, self.imu_time = (self.raw_heading-self.heading_reference_deg)%360, self.clock()
             if self.recorder and self.state in ACTIVE:
-                self.recorder.telemetry('imu', dict(heading=self.heading, stamp=stamp, received_utc=utc()))
+                self.recorder.telemetry('imu', dict(heading=self.heading,raw_heading=self.raw_heading,
+                    heading_reference_deg=self.heading_reference_deg,stamp=stamp,received_utc=utc()))
+
+    def begin_heading_zero(self):
+        with self.lock:
+            self.heading_reference_deg=None;self.heading=None;self.imu_time=-1e9
 
     def scan_update(self, observation, stamp, source_age_s=0.):
         with self.lock:
@@ -156,6 +171,8 @@ class Survey:
             self.scan_sequence+=1
             self.scan=dict(observation,stamp=stamp,mono=self.clock()-max(0.,source_age_s),sequence=self.scan_sequence)
             self.classify_scan()
+            if self.scan['valid']:
+                self.last_valid_scan=self.scan
             if self.recorder and self.state in ACTIVE:
                 self.recorder.telemetry('lidar',dict(self.scan,received_utc=utc()))
 
@@ -172,8 +189,6 @@ class Survey:
             if not isinstance(route, list) or (pattern == 'waypoints' and len(route) > 100):
                 raise ValueError('웨이포인트는 최대 100개입니다.')
             pts = [point(p['lat'], p['lon']) for p in route]
-            if pts and any(distance(pts[0], p) > 2000 for p in pts):
-                raise ValueError('한 조사 구역은 첫 지점에서 2km 이내로 지정하세요.')
             opts = checked_settings(self.settings,settings)
             plan = None
             if pattern == 'coverage':
@@ -188,10 +203,18 @@ class Survey:
             self.classify_scan()
 
     def classify_scan(self):
-        if self.scan:
-            mean=self.scan.get('front_mean_m')
-            self.scan['obstacle_m']=self.settings['obstacle_m']
-            self.scan['obstacle']=bool(self.scan.get('valid') and mean is not None and mean<=self.settings['obstacle_m'])
+        for scan in (self.scan,self.last_valid_scan):
+            if scan:
+                mean=scan.get('front_mean_m')
+                scan['obstacle_m']=self.settings['obstacle_m']
+                scan['obstacle']=bool(scan.get('valid') and mean is not None and mean<=self.settings['obstacle_m'])
+
+    def navigation_scan(self):
+        # A missing front return is unknown, never evidence of open water. Hold
+        # the last usable observation for at most one second; its sequence is
+        # unchanged, so it cannot rearm or generate another bank event.
+        scan=self.scan if self.scan and self.scan['valid'] else self.last_valid_scan
+        return scan if scan and self.clock()-scan['mono']<=1 else None
 
     def live_update(self,settings,waypoint,revision):
         """Atomic edits that preserve arming, progress, cells and mission identity."""
@@ -205,9 +228,6 @@ class Survey:
                 i=waypoint.get('index')
                 if type(i) is not int or not 0<=i<len(route):raise ValueError('유효하지 않은 경유지 번호')
                 p=point(waypoint['lat'],waypoint['lon']);route[i]=p
-                if any(distance(route[0],v)>2000 for v in route):raise ValueError('한 조사 구역은 첫 지점에서 2km 이내로 지정하세요.')
-                if self.position() and self.position()['valid'] and distance(self.position(),p)>2000:
-                    raise ValueError('경유지는 현재 위치에서 2km 이내로 지정하세요.')
                 target_changed=i==self.index
             old_settings=self.settings.copy();old_route=self.route
             if self.recorder and self.state in ACTIVE:
@@ -218,6 +238,7 @@ class Survey:
                 self.recorder.sync(force=True)
             self.settings=opts;self.route=route;self.plan_revision+=1;self.classify_scan()
             if target_changed:
+                self.route_complete=False
                 self.arrivals=0;self.arrival_gps_time=None
                 if self.state in ACTIVE:
                     self.state='running';self.dwell_start=None;self.dwell_sample=False
@@ -245,7 +266,7 @@ class Survey:
         with self.lock:
             if self.state in ACTIVE or self.clock() < self.stop_until:
                 raise ValueError('먼저 조사를 정지하고 정지 명령 전송을 기다리세요.')
-            self.reset_position()
+            # A new survey clears observations, not the selected GPS input.
             self.state, self.reason, self.mission_id = 'idle', '', None
             self.route, self.cells, self.area, self.plan = [], {}, None, None
             self.pattern, self.origin, self.index = 'waypoints', None, 0
@@ -289,7 +310,8 @@ class Survey:
             if self.pattern != 'waypoints':return '중앙 경유지를 지정한 뒤 자율운항을 시작하세요.'
             if self.heading is None or now-self.imu_time > 2:return '자율운항용 IMU 방향을 기다리고 있습니다.'
             if not self.scan or now-self.scan['mono'] > 1:return '자율운항용 라이다 스캔이 없거나 1초 이상 지연됐습니다.'
-            if not self.scan['valid']:return '라이다 정면 1° 구간의 유효 측정을 기다리고 있습니다.'
+            if not self.scan['valid'] and self.state not in ACTIVE:
+                return '라이다 정면 1° 구간의 유효 측정을 기다리고 있습니다.'
         return None
 
     def start(self, owner, armed=False, navigation='waypoint'):
@@ -306,14 +328,14 @@ class Survey:
                 raise ValueError(reason)
             if self.mode == 'real' and armed is not True:
                 raise ValueError('수상 주행 활성화를 확인하세요.')
-            if distance(self.position(), self.route[0]) > 2000:
-                raise ValueError('첫 웨이포인트가 현재 위치에서 2km 밖에 있습니다.')
             self.owner, self.heartbeat, self.armed = owner, self.clock(), armed is True
             self.navigation = navigation
-            self.zigzag = RiverZigzag() if navigation == 'river_zigzag' else None
+            self.zigzag = RiverZigzag(clock=self.clock) if navigation == 'river_zigzag' else None
             self.guidance = None
+            self.lidar_waiting = False
             self.leg_origin = point(self.position()['lat'],self.position()['lon'])
             self.state, self.reason, self.index = 'running', '', 0
+            self.pause_reason=None;self.fault_reason=None;self.route_complete=False
             self.plan_revision+=1
             self.origin = self.plan['origin'] if self.plan else point(self.route[0]['lat'], self.route[0]['lon'])
             self.cells, self.count, self.mapped = {}, 0, 0
@@ -338,12 +360,16 @@ class Survey:
         self.recorder.meta.update(pattern=self.pattern, area=self.area, plan=self.plan,
             position_input='map_click' if self.mode == 'simulated' else 'gps',navigation=navigation,
             initial_position=self.position().copy(),initial_heading_deg=self.heading,
+            heading_reference_deg=self.heading_reference_deg,
             propulsion_enabled=self.armed,
             initial_route=list(self.route),initial_settings=self.settings.copy(),plan_revision=self.plan_revision)
         if self.zigzag:
             self.recorder.meta['river_zigzag']=dict(offset_deg=self.settings['zigzag_deg'],obstacle_m=self.settings['obstacle_m'],trim_each_tail=.2,
                 front_interval_deg=[-.5,.5],switch_on='new_front_obstacle',
-                waypoint_transition='two fresh positions inside radius or past centreline cross-section')
+                waypoint_transition='intermediate: two fresh positions inside radius or past cross-section; final: inside radius only',
+                turn_interval_s=self.settings['turn_interval_s'],
+                invalid_front='hold usable scan up to 1s, then neutral until fresh valid scan; mission stays open',
+                termination='operator stop only; destination holds neutral and continues recording')
         self.recorder.save_meta()
 
     def stop(self, reason='사용자가 정지했습니다.', complete=False, neutral=False):
@@ -354,6 +380,7 @@ class Survey:
                 self.stop_until = self.clock()+2 if self.armed else -1e9
                 self.state = 'complete' if complete else 'stopped'
                 self.reason = reason
+                self.pause_reason=None
             self.command.update(throttle=0.0, servo=90.0)
             self.armed = False
             if self.hardware and (was_armed or (neutral and self.mode=='real')):
@@ -364,11 +391,31 @@ class Survey:
                     command=self.command,armed=False,reason=reason))
                 self.recorder.finish(self.state, reason)
 
+    def pause_motion(self, reason):
+        """Neutral output without finishing a mission or discarding its arming."""
+        self.pause_reason=reason;self.reason=reason
+        self.command.update(throttle=0.,servo=90.)
+
+    def hold_destination(self, reason):
+        self.route_complete=True
+        self.pause_motion(reason)
+        if self.recorder:self.recorder.event('destination_hold',dict(waypoint=self.index+1,reason=reason))
+
     def autonomous_command(self, p, target, dist, angle):
         """Centreline points guide continuous river progress, without a dwell."""
+        scan=self.navigation_scan()
+        waiting=scan is None
+        if waiting!=self.lidar_waiting:
+            self.lidar_waiting=waiting
+            if self.recorder:self.recorder.event('lidar_wait' if waiting else 'lidar_resumed',
+                dict(scan_sequence=self.scan['sequence'],waypoint=self.index+1))
+        if waiting:
+            self.pause_motion('라이다 정면 측정 복구 대기')
+            if self.guidance:self.guidance=dict(self.guidance,phase='waiting_lidar',event=None)
+            return
         gx,gy=xy(target,self.leg_origin);px,py=xy(p,self.leg_origin)
         passed=(gx*gx+gy*gy>=1 and px*gx+py*gy>=gx*gx+gy*gy)
-        reached=dist<=self.settings['radius_m'] or passed
+        reached=dist<=self.settings['radius_m'] or (passed and self.index<len(self.route)-1)
         if p['mono']!=self.arrival_gps_time:
             self.arrivals=self.arrivals+1 if reached else 0
             self.arrival_gps_time=p['mono']
@@ -377,20 +424,21 @@ class Survey:
                 self.recorder.event('guidance_passed',dict(waypoint=self.index+1,
                     within_radius=dist<=self.settings['radius_m'],past_cross_section=passed))
             self.leg_origin=point(target['lat'],target['lon'])
-            self.index+=1;self.arrivals=0;self.arrival_gps_time=p['mono']
-            if self.index==len(self.route):
-                self.stop('마지막 중앙 경유지 구간을 통과했습니다.',complete=True)
+            self.arrivals=0;self.arrival_gps_time=p['mono']
+            if self.index==len(self.route)-1:
+                self.hold_destination('마지막 경유지 도착 · 중립 대기')
                 return
+            self.index+=1
             target=self.route[self.index];dist=distance(p,target);angle=bearing(p,target)
-        self.guidance=self.zigzag.guide(angle,self.heading,self.index,self.scan,
-            self.settings['zigzag_deg'],self.settings['obstacle_m'])
+        self.guidance=self.zigzag.guide(angle,self.heading,self.index,scan,
+            self.settings['zigzag_deg'],self.settings['obstacle_m'],self.settings['turn_interval_s'])
         self.command.update(distance=dist,bearing=angle,servo=max(30.,min(150.,
             90.+heading_error(self.guidance['course_deg'],self.heading))),
             throttle=self.settings['throttle'] if self.armed else 0.)
         if not self.armed:self.command['servo']=90.
         if self.recorder and self.guidance['event']:
             self.recorder.event(self.guidance['event'],dict(self.guidance,waypoint=self.index+1,
-                scan_sequence=self.scan['sequence'],scan_stamp=self.scan['stamp']))
+                scan_sequence=scan['sequence'],scan_stamp=scan['stamp']))
 
     def tick(self):
         with self.lock:
@@ -399,7 +447,8 @@ class Survey:
                 self.recorder.telemetry('navigation',dict(received_utc=utc(),mono=self.clock(),
                     state=self.state,waypoint=self.index+1,navigation=self.navigation,
                     position=self.position(),heading_deg=self.heading,guidance=self.guidance,
-                    command=self.command,armed=self.armed))
+                    command=self.command,armed=self.armed,pause_reason=self.pause_reason,
+                    route_complete=self.route_complete))
 
     def control_step(self):
         with self.lock:
@@ -408,10 +457,14 @@ class Survey:
             self.last_tick = now
             if self.state not in ACTIVE:
                 return
-            reason = self.prerequisites()
+            reason = self.fault_reason or self.prerequisites()
             if reason:
-                self.stop(reason)
+                self.pause_motion(reason)
                 return
+            if self.route_complete:
+                self.pause_motion('마지막 경유지 도착 · 중립 대기')
+                return
+            self.pause_reason=None;self.reason=''
             p, target = self.position(), self.route[self.index]
             dist, angle = distance(p, target), bearing(p, target)
             self.command.update(distance=dist, bearing=angle)
@@ -445,10 +498,10 @@ class Survey:
                 if outside_target or dist > self.settings['radius_m']*1.5:
                     self.state, self.arrivals, self.dwell_start = 'running', 0, None
                 elif now-self.dwell_start >= self.settings['dwell_s'] and (not self.plan or self.dwell_sample):
-                    self.index += 1
-                    if self.index == len(self.route):
-                        self.stop('모든 웨이포인트의 관측을 마쳤습니다.', complete=True)
+                    if self.index == len(self.route)-1:
+                        self.hold_destination('마지막 경유지 관측 완료 · 중립 대기')
                     else:
+                        self.index += 1
                         self.state, self.arrivals, self.dwell_start = 'running', 0, None
 
     def output(self):
@@ -513,11 +566,12 @@ class Survey:
             values = [c['total']/c['count'] for c in self.cells.values()]
             scale = [min(values), max(values)] if values else self.do_range
             return dict(mode=self.mode, state=self.state, route=self.route, settings=self.settings,
-                        plan_revision=self.plan_revision,
+                        plan_revision=self.plan_revision,pause_reason=self.pause_reason,route_complete=self.route_complete,
                         drive_ready_reason=self.prerequisites('waypoint',driving=True),
                         autonomy_drive_ready_reason=self.prerequisites('river_zigzag',driving=True),
                         speed_m_s=self.speed_m_s if self.mode=='real' and self.gps and now-self.gps['mono']<=3 else None,
                         navigation=self.navigation,guidance=self.guidance,
+                        raw_heading=self.raw_heading,heading_reference_deg=self.heading_reference_deg,
                         lidar={k:v for k,v in self.scan.items() if k!='mono'} if self.scan else None,
                         lidar_age_s=now-self.scan['mono'] if self.scan else None,
                         autonomy_ready_reason=self.prerequisites('river_zigzag'),

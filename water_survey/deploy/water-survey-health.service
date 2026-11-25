@@ -1,0 +1,16 @@
+[Unit]
+Description=Read-only vessel GPS lidar IMU health display
+After=water-survey-indoor.service
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && source /home/ubuntu/water_survey_ws/current_release/install/setup.bash && exec python3 -m water_survey.sensor_health'
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+TimeoutStopSec=8
+
+[Install]
+WantedBy=multi-user.target

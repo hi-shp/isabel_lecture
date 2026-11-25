@@ -24,3 +24,13 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 https://github.com/Leaflet/Leaflet/blob/v1.9.4/LICENSE
 Basemap tiles: https://www.openstreetmap.org/copyright
+
+
+html2canvas 1.4.1 (static/vendor/html2canvas.min.js)
+Copyright (c) 2012 Niklas von Hertzen. MIT License.
+Full retained notice: static/vendor/html2canvas-LICENSE.txt
+
+JSZip 3.10.1 (static/vendor/jszip.min.js)
+Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, Antonio Afonso.
+Distributed here under the MIT option of its dual MIT/GPLv3 license.
+Full retained license text: static/vendor/jszip-LICENSE.txt

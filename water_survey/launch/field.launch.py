@@ -12,8 +12,9 @@ def generate_launch_description():
                         'launch', 'mechaship_bringup.launch.py')
     return LaunchDescription([
         IncludeLaunchDescription(PythonLaunchDescriptionSource(base),
-                                 launch_arguments={'survey_dashboard': 'false'}.items()),
+                                 launch_arguments={'survey_dashboard': 'false',
+                                    'mechaship_imu_parameter':os.path.join(get_package_share_directory('water_survey'),'config','mechaship_imu.yaml')}.items()),
         Node(package='water_survey', executable='survey_dashboard',
              name='water_survey_dashboard', output='screen',
-             parameters=[{'allow_hardware': True}]),
+             parameters=[{'allow_hardware': True, 'default_mode': 'real'}]),
     ])

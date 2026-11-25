@@ -1,5 +1,5 @@
 [Unit]
-Description=Water survey indoor dashboard
+Description=Water survey dashboard
 After=bluetooth.service network-online.target
 Wants=bluetooth.service network-online.target
 Conflicts=water-survey-field.service
@@ -10,7 +10,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu
 Environment=PYTHONUNBUFFERED=1
 Environment=ROS_DOMAIN_ID=0
-ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && source /home/ubuntu/uros_ws/install/setup.bash && source /home/ubuntu/water_survey_ws/install/setup.bash && exec ros2 launch water_survey indoor.launch.py'
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash && source /home/ubuntu/uros_ws/install/setup.bash && source /home/ubuntu/water_survey_ws/current_release/install/setup.bash && exec ros2 launch water_survey dashboard.launch.py'
 KillSignal=SIGINT
 TimeoutStopSec=25
 Restart=on-failure

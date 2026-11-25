@@ -1,18 +1,71 @@
 # Isabel 위치별 용존산소 조사
 
-기존 `example` 예제와 별도로 ROS 2 `water_survey` 패키지를 추가했다. 지도에서 경유지를 지정하고 시작하면 순서대로 이동·관측하면서 실제 ScienceCube WL118DO 값을 위치와 결합한다. 지도와 하단 사각 격자는 관측한 칸의 DO 평균을 표시한다.
+ROS 2 `water_survey`는 ScienceCube WL118DO 수신값을 위치와 결합해 격자 지도와 조사 파일로 저장합니다. 이사벨 작업이며 별개 프로젝트인 `kaboat2026` 코드를 실행하거나 수정하지 않습니다.
 
-## 현재 상태
+## 선박 적용 확인 — 2026-11-25
 
-- 선박: Radxa ROCK 5A, Ubuntu 24.04, ROS 2 Jazzy. `mechaship_bringup`과 micro-ROS 환경은 선박에 별도 설치돼 있다.
-- 실제 센서 `WL118D283`, 펌웨어 `V403`에서 수신 확인. 연결은 PC 모드의 Bluetooth Classic SPP 채널 2다.
-- 실내 서비스는 선박에서 실행 중이며 부팅 자동 시작이 설정돼 있다. 가상 위치 시험은 실제 DO를 사용하지만 추진 토픽 발행자를 만들지 않는다.
-- 수상 통합 브링업과 서비스도 제공한다. 실제 조향 방향·추진기 배선과 수상 주행은 아직 검증하지 않았다. 현재 확인된 제어 인터페이스는 조향 서보 하나와 추진 출력 하나이며, 좌우 독립 추진기는 해당 인터페이스 또는 추가 어댑터 확인이 필요하다.
-- 사전 지정 경로에 따른 관측 기능이다. DO 하나로 배출원을 확정하거나 유동장을 따라 오염원을 자동 역추적하는 기능은 포함하지 않는다.
+핫스팟에서 기존 SSH 키가 일치하는 이사벨 Radxa ROCK 5A를 다시 찾아 적용했습니다. 현재 버전은 `/home/ubuntu/water_survey_releases/20261125_1431/`, 고정 연결은 `/home/ubuntu/water_survey_ws/current_release`입니다. 기존 코드·서비스는 `/home/ubuntu/water_survey_backups/20261125_1431/`에 백업하고 이전 조사 자료를 보존했습니다. 서비스는 SSH와 독립적으로 실행합니다.
 
-## 설치
+선박 빌드와 자동 확인 43개 통과. 실제 WL118D283/V403 DO로 4칸/13개 조사 및 재접속 확인. 실제 DO·IMU·라이다를 사용한 클릭 위치 주행에서 출력·반경·장애물 거리·45→60→0°·현재 목표 좌표 변경, IMU 원본406개·GPS 원본45개·라이다 원본45개·제어 판단49개와 DO4개 저장·ZIP 내보내기 확인. 선박에서 저장 폴더만 사용해 지도·그래프·보고서도 재생성했습니다. SSH 및 시험 소유자의 WebSocket을 22초간 끊은 조사에서는 DO22개가 계속 기록됐습니다. 모든 검증에서 실제 추진 명령 발행 증가0회입니다. 클릭 위치의 시험 기록을 실제 GPS 주행 자료와 구분합니다.
 
-기존 선박의 항법 코드를 덮어쓰지 않고 별도 작업공간에 설치한다. 아래 경로는 현재 선박의 `ubuntu` 계정 기준이다. 다른 계정이면 서비스 파일의 경로와 User도 수정해야 한다.
+GPS 메시지는 수신하나 상태 -1·좌표NaN으로 유효한 위치가 없습니다. IMU는 기존 YAML 노드 이름 불일치로 출력이 비활성화돼 있어 해당 노드 이름으로 수신을 확인했고, 주행용 브링업에는 동일 센서 설정을 모든 노드 이름에 적용하는 `config/mechaship_imu.yaml`을 연결했습니다. 임시 `isabel-sensor-check.service`는 GPS·IMU·라이다만 읽고 액추에이터를 활성화하지 않습니다. 주행용 base 서비스 시작 시 이 진단 서비스를 먼저 중지하도록 충돌 관계를 설정했습니다.
+
+최종 상태는 실제 GPS 모드·조사 대기·추진 비활성입니다. 실제 선체 이동·조향 부호·라이다 장착 방향·충돌 회피 성능·모터 중립 ACK는 물리 시험하지 않았습니다. 선박 적용 이후에도 실제 화면 공유 WebM 녹화 검증은 별도입니다.
+
+## 주행 중 실시간 변경
+
+지도 높이를 기존 410px에서 화면 높이에 따라 620~920px로 늘렸습니다. 웨이포인트 마커를 드래그해 놓으면 현재 주행을 재시작하지 않고 그 좌표를 적용합니다. 현재 목표를 옮기면 새 좌표로 즉시 재조향하며, 미래 목표를 옮기면 해당 목표 순서에서 사용합니다. 도착 후 관측 중인 목표를 멀리 옮기면 그 지점으로 다시 이동합니다. 직사각형의 생성된 셀 경로·격자 크기·조사 방식은 주행 전 설정입니다.
+
+추진 출력(1~30%), 도착 반경(1~20m), 지점 관측(3~120초), 장애물 인지 거리(0.2~30m), 지그재그 각도(0~80°)는 입력 중 약 180ms 동안 추가 입력이 없으면 전송하고, 선박 제어의 다음 주기(기본 100ms)에 사용합니다. 네트워크 지연은 추가됩니다. 입력한 각도나 거리 값은 기록과 경유지 진행을 초기화하지 않습니다. 변경은 저장 확인 후 적용하며 전후 값과 시각을 events.jsonl에 남깁니다. 종료 이전의 지연된 변경·오래된 버전의 변경을 거부하고, 재접속하면 선박의 최종 설정과 경유지를 다시 받습니다. 오프라인 입력은 자동 재전송하지 않습니다.
+
+지그재그 기본 각도는 45°입니다. 60°는 목표 방위에서 좌우 60° 진행으로 좌우 폭이 커지고 같은 선속에서 목표 방향 전진 성분이 줄어듭니다. 선회 속도를 60°/s로 지정하는 값은 아닙니다. 0°는 좌우 장애물 전환 없이 현재 목표 방위를 매 제어 주기 추종합니다. 장애물 인지 거리는 기본 2m이며 변경 즉시 최신 유효한 정면 1° 절사 평균에 적용합니다.
+
+지점 관측이 3초라면 웨이포인트에 도착한 뒤 추진 0%·조향 중앙 상태에서 3초간 DO를 기록하고 다음 지점으로 갑니다. 기본 설정은 10초이며 자율운항 지그재그에는 관측 대기를 사용하지 않습니다. 조절하는 주행 출력은 추진 비율이며 목표 속도(m/s) 제어가 아닙니다. 지도 위 GPS 속도는 연속 두 GPS의 좌표와 센서 시각으로 계산한 추정값입니다.
+
+## 두 주행 버튼
+
+주행 시작과 동시에 선박의 `/home/ubuntu/water_survey_data/<조사ID>/`에 자동 기록합니다. 사진·영상 버튼, 노트북, SSH 연결과 독립적으로 저장하며 이전 조사는 자동 삭제하지 않습니다. 화면의 최근 600개 제한은 그래프 표시용이며 파일 기록 수를 제한하지 않습니다.
+
+자동 기록에는 모든 수신 GPS·IMU·LaserScan 메시지의 원본 필드(`gps_raw.jsonl`, `imu_raw.jsonl`, `lidar_raw.jsonl`), 해석한 위치·방향·180개 라이다 구간, DO와 위치를 결합한 전체 `samples.csv`, 매 제어 주기의 `navigation.jsonl`, 실제 발행한 `commands.jsonl`, 시작·전환·종료 이벤트 및 주행 설정·경유지·범위·좌표 원점이 포함됩니다. IMU를 시간 구간별로 줄이지 않으며 라이다 원본 ranges/intensities도 남깁니다. 정지 뒤 약 2초 동안 발행하는 중립 명령도 같은 조사에 기록합니다. Bluetooth 원시 송수신 로그는 상위 `sensor_raw/`에 따로 보존합니다. 기록 범위는 이 대시보드가 구독·수신한 센서이며 카메라 영상이나 별도 PointCloud2를 자동 녹화한다는 뜻은 아닙니다.
+
+각 기록은 줄마다 파일로 쓰고 약 1초 주기로 디스크에 동기화하며 정상 종료 때 최종 동기화합니다. 갑작스러운 전원 차단은 마지막 기록 일부가 손실될 수 있습니다. 저장 오류가 나면 주행을 종료하고 중립을 요청합니다. 원본 파일은 보존하고, 재시각화 시 전원 차단으로 잘린 CSV 마지막 행은 제외한 사실을 메타데이터에 남깁니다.
+
+저장된 조사 폴더만 있으면 선박 연결·ROS·브라우저 없이 다시 지도와 그래프를 만들 수 있습니다. 선박에서는 `ros2 run water_survey survey_rebuild /home/ubuntu/water_survey_data/<조사ID>`를 실행합니다. 복사한 소스와 조사 폴더가 있는 PC에서는 아래처럼 실행합니다.
+
+```powershell
+$env:PYTHONPATH='water_survey'
+python -m water_survey.replay "D:\조사자료\<조사ID>" --output "D:\조사자료\시각화"
+```
+
+기본 출력은 조사 폴더의 `visualization/`입니다. `report.html`, DO 격자와 전체 위치 궤적을 겹친 `map.svg`, `timeseries.svg`, `track.geojson`, 그 밖의 분석 CSV/GeoJSON과 원본 기록을 포함한 `survey-export.zip`을 만듭니다. 배경 지도 타일은 포함하지 않습니다. 이 기능의 선박 적용과 저장 폴더 기반 재생성을 확인했습니다.
+
+- **웨이포인트 추종 시작**: 기존 동작 그대로, 찍은 순서의 지점으로 직접 진행합니다. 도착 반경 안의 새로운 GPS 두 번을 확인하면 추진 0·조향 중앙으로 전환하고 설정 시간 동안 관측한 뒤 다음 지점으로 이동합니다. 마지막 지점에서 종료합니다. 직사각형 격자 모드도 이 버튼으로 기존 셀 중심 경로를 순서대로 관측합니다.
+- **자율운항 주행**: 강 중앙의 안내점을 순서대로 찍고 사용합니다. 현재 안내점 방위에서 오른쪽 설정 각도(기본 45°)로 진행을 시작하고, 한 구간의 방위는 고정해 직진합니다. 정면 장애물 판정 때만 현재 안내점 방위 기준 반대쪽 설정 각도로 전환합니다. 중앙 방향으로 일정 거리를 가는 구간이나 시간·거리 기반 좌우 전환은 없습니다.
+- 자율운항은 중앙 안내점의 도착 반경 안에 들어오거나 해당 안내점의 중심선 수직 단면을 통과한 새 위치 두 번을 확인하면 멈추지 않고 다음 안내점으로 넘어갑니다. 마지막 안내점 구간을 통과하면 중립으로 종료합니다. 따라서 이 모드의 안내점 통과는 그 좌표를 직접 방문했다는 뜻이 아닙니다.
+- **주행 종료 · 즉시 중립**: 현재 주행을 해제하고 실제 위치 모드의 조향·추진 발행자가 있으면 조향 90°와 추진 0%를 즉시 발행합니다. 같은 중립 명령을 약 2초간 반복합니다. 만료된 WebSocket 세션과 브링업 처리 중에도 같은 출처의 종료 요청을 받습니다. 종료 전에 보낸 지연된 시작 요청은 제어 버전으로 거부합니다.
+
+제어 인터페이스는 `/actuator/key/degree`와 `/actuator/thruster/percentage`의 **조향 1개·추진 1개**입니다. 별도 좌우 스러스터 제어라고 가정하지 않습니다. 조향과 추진 메시지의 발행은 확인할 수 있지만 현재 토픽에는 모터 중립 ACK가 없어 물리적 정지를 소프트웨어 응답만으로 확정하지 않습니다.
+
+## 라이다 장애물 판정
+
+1. 기본 입력은 `sensor_msgs/LaserScan`의 `/scan`입니다. ROS 매개변수 `scan_topic`, `scan_yaw_offset_deg`로 실제 토픽과 선수 기준 장착 방향을 맞춥니다.
+2. 전방 `[-90°, 90°)`를 1°씩 180개 구간으로 나눕니다. 각 구간의 유효한 양수 히트 거리값을 정렬하고 양 끝에서 각각 `floor(N × 0.2)`개를 제외한 나머지의 평균을 계산합니다.
+3. 실제 전환 판단용 정면 1°는 선수 양쪽을 대칭으로 보는 `[-0.5°, +0.5°)`입니다. 이 구간에도 같은 양끝 20% 절사 평균을 사용하며 **평균이 설정한 인지 거리(기본 2m) 이하이면 장애물**입니다. 전방 180° 전체의 평균이나 최솟값으로 판정하지 않습니다.
+4. 점이 5개 미만이면 정수 개수 절사 결과가 0개일 수 있습니다. NaN·0·음수·센서 범위 밖 값은 제외하고, `+inf` 무반사 광선은 숫자 평균에 넣지 않습니다. 유효한 정면 광선이 있으나 히트가 없으면 해당 프레임은 장애물 미검출입니다.
+5. 한 장애물로 매 제어 주기마다 좌우가 뒤집히지 않게, 새 반사 프레임에서만 전환합니다. 반대 방위로 정렬되고 새 정면 스캔이 장애물 미검출인 뒤 다음 전환을 허용합니다.
+
+이 방식은 요청한 강변 감지 기반 조사 전략이며 선체 전체의 충돌 없는 궤적을 계산하는 회피 계획기는 아닙니다. 실제 이동한 위치만 격자를 채우므로 하천의 모든 칸 관측을 보장하지 않습니다. 빈 칸은 계속 미관측으로 남습니다.
+
+## 현재 확인 범위
+
+- 대상 선박의 마지막 확인 장비는 **Radxa ROCK 5A / Ubuntu 24.04 / ROS 2 Jazzy**, 사용자 `ubuntu`, 작업공간 `/home/ubuntu/water_survey_ws`입니다. Jetson/ROS Humble 프로젝트와 구분합니다.
+- 2026-11-04 실제 `WL118D283` / `V403`의 Bluetooth Classic SPP 채널 2 수신과 실내 417개 DO 기록을 확인했습니다. 이 기록은 클릭 위치를 사용한 시험이며 수영강 현장 측정 결과가 아닙니다.
+- 연결 복구 전에는 이전 주소 `192.168.80.78`이 응답하지 않았고, 이후 핫스팟에서 재발견하여 위 버전을 적용했습니다. 실제 수상 운항과 라이다 장착 방향은 아직 미확인입니다.
+- 상세 확인 결과는 [VALIDATION.md](water_survey/VALIDATION.md)에 구분해 기록합니다.
+
+## 실행과 전체화면 창
+
+기존 항법 작업공간을 덮어쓰지 않고 설치합니다.
 
 ```bash
 sudo apt-get install bluez python3-aiohttp
@@ -22,72 +75,66 @@ source /opt/ros/jazzy/setup.bash
 cd /home/ubuntu/water_survey_ws
 colcon build --packages-select water_survey
 source install/setup.bash
-ros2 launch water_survey indoor.launch.py
+ros2 launch water_survey dashboard.launch.py
 ```
 
-`http://선박IP:8000`을 연다. 현재 선박 IP는 `192.168.80.78`이며 핫스팟 재연결 후 달라질 수 있다. 온라인 지도 배경은 인터넷이 필요하다. Leaflet 자체는 패키지에 포함해 격자·좌표·경로는 배경 타일이 없어도 동작한다.
-
-## SSH와 무관하게 실행
+지속 실행은 `water-survey-indoor.service`를 사용합니다. 이름은 호환용으로 유지하지만 현재 내용은 `dashboard.launch.py`를 실행하고 실제 위치 모드로 대기합니다. 대시보드가 `water-survey-base.service`를 시작/종료하며, 실제 조사는 별도의 주행 버튼과 수상 주행 활성화가 필요합니다. 기본 추진 20%, 설정 상한 30%입니다.
 
 ```bash
-sudo install -m 0644 /home/ubuntu/water_survey_ws/src/water_survey/deploy/*.service /etc/systemd/system/
+sudo install -m 0644 water_survey/deploy/*.service /etc/systemd/system/
+sudo install -m 0440 water_survey/deploy/water-survey.sudoers /etc/sudoers.d/water-survey
+sudo visudo -cf /etc/sudoers.d/water-survey
 sudo systemctl daemon-reload
-sudo systemctl enable --now water-survey-indoor
+sudo systemctl enable --now water-survey-indoor.service
 ```
 
-서비스는 선박에서 실행된다. SSH·브라우저·핫스팟 연결이 끊겨도 진행 중 조사와 파일 저장을 계속한다. 브라우저는 재연결 시 서버의 같은 조사 ID와 현재 진행 상태를 다시 받는다. 최근 600개 그래프와 3000개 위치를 화면으로 받고 전체 기록은 파일로 받는다. GPS·IMU·DO가 오래되면 수상 조사는 정지한다. 프로세스 재시작·전원 재부팅 후에는 새 대기 상태이며 진행 중 조사를 자동 출발시키지 않는다. 기존 기록은 디스크에 남는다.
+기존 선박 브링업과 `field.launch.py`를 같은 장비에 중복 실행하지 않습니다. `water-survey-base.service`는 부팅 자동 시작을 설정하지 않습니다. 하드웨어 출력이 없는 기존 `indoor.launch.py`도 유지합니다.
 
-## 실내 시험
-
-1. 센서를 PC 모드로 켠다. 기존 `do_receiver.py`와 Science# 등 센서를 점유하는 다른 수신 프로그램은 종료한다.
-2. 대시보드에서 DO 수신을 확인한다.
-3. **가상 GPS 위치 찍기**를 누르고 지도에 위치를 찍는다.
-4. **경유지 추가**를 누르고 가까운 점들을 순서대로 지정한다.
-5. **순서대로 조사 시작**을 누른다. 가상 위치가 이동하고 실제 DO가 격자와 시간 그래프에 기록된다.
-6. **현재 조사 파일 받기**로 ZIP을 받는다. 가상 위치는 `position_source=simulated`로 표시한다.
-
-## 수상 통합 브링업
-
-기존 브링업과 기존 gps_map_node를 별도로 중복 실행하지 않는다. 새 통합 진입점은 다음과 같다.
+노트북에서는 다음을 실행하면 localhost 프록시와 **Chrome/Edge 독립 앱 창**을 열며 전체화면으로 시작하도록 요청합니다.
 
 ```bash
-# 서비스 방식: SSH를 종료해도 계속 실행
-sudo systemctl start water-survey-field
-# 또는 수동 실행 (서비스와 동시에 실행하지 않는다)
-source /opt/ros/jazzy/setup.bash
-source /home/ubuntu/ros2_ws/install/setup.bash
-source /home/ubuntu/uros_ws/install/setup.bash
-source /home/ubuntu/water_survey_ws/install/setup.bash
-ros2 launch water_survey field.launch.py
+python water_survey/scripts/laptop_viewer.py --ship http://현재선박IP:8000
 ```
 
-두 서비스는 서로 배타적이다. field 서비스는 설치만 하며 자동 부팅 출발을 설정하지 않는다. 실제 GPS·IMU·DO와 추진 수신 노드가 준비되고 화면의 수상 주행 활성화를 확인해야 시작할 수 있다. 다른 추진 토픽 발행자가 있으면 시작을 막는다. 기본 추진 20%, 상한 30%, 도착 반경 3m, 지점 관측 10초다. 기존 MCU 펌웨어와 ESC 설정은 변경하지 않는다.
+기본 주소는 `http://localhost:8787`입니다. `--windowed`는 일반 크기의 독립 창, `--no-browser`는 프록시만 실행합니다. `--browser`에 기존 Chrome/Edge 실행 파일 경로를 줄 수 있습니다. 지원 브라우저가 없으면 기본 브라우저로 열고 전체화면은 F11로 전환합니다. 노트북 프록시 종료와 선박 프로세스 종료는 서로 다릅니다.
 
-사용 토픽: `/gps/fix` (NavSatFix), `/imu` (Imu), `/actuator/key/degree` (Float64), `/actuator/thruster/percentage` (Float64). IMU는 ROS ENU 방향에 맞춰 북쪽 기준 방위로 변환한다. 설치 방향·방위 오프셋·실제 회전 방향은 현장에서 확인해야 한다.
+SSH·브라우저가 끊겨도 선박 내부 조사와 파일 기록은 계속하며 재연결 시 같은 조사 상태를 받습니다. 선박 프로세스 재시작·전원 재부팅 뒤에는 기록을 남기고 새 대기 상태로 시작합니다. GPS 3초·IMU 2초·DO 5초 이상 지연되면 정지하며 자율운항은 유효한 정면 라이다가 1초 이상 끊겨도 정지합니다. 새로 시작하려면 원인을 해소하고 주행 버튼을 다시 누릅니다.
 
-## 파일과 재분석
+## 클릭 위치·직사각형·색 범위
 
-기록 경로는 `/home/ubuntu/water_survey_data/`다. 조사별 폴더를 만들고 기록마다 CSV를 flush한다. 내보내기는 다음을 포함한다.
+**가상위치 퍼블리시**를 누른 뒤 클릭한 좌표만 입력됩니다. 자동으로 이동하지 않습니다. 이 모드에서는 실제 추진 발행자가 없고 `/gps/fix`를 덮어쓰지 않으며, 별도 `/water_survey/manual_fix`만 발행합니다. 조사 중에도 다음 클릭 위치를 줄 수 있습니다. 실제 GPS로 돌아갈 때는 정지 후 **위치 초기화**를 사용합니다.
+
+직사각형의 두 꼭짓점을 지정하면 최대 2500칸의 셀 중심을 지그재그로 방문하는 별도의 격자 경로가 만들어집니다. 각 목표 칸에서 새 DO를 받아야 다음 칸으로 넘어갑니다. 범위 밖 DO도 원본 파일에는 남지만 격자에는 집계하지 않습니다. **새 조사 지도**는 화면을 새로 준비하고 기존 조사 파일은 보존합니다.
+
+색 양 끝은 **현재 조사에서 누적된 격자 평균의 최솟값·최댓값**이며 2~12로 고정하지 않습니다. 모든 칸의 평균이 같으면 같은 중간색입니다. 원본 DO 범위는 별도로 보존합니다. 색은 DO 값의 상대 차이이며 오염 등급이 아닙니다.
+
+## 이미지·영상 저장
+
+- **전체 페이지 캡처**: 스크롤 전체 PNG와 계획·상태·지도·격자·그래프의 패널 PNG 5개 및 `manifest.json`을 ZIP으로 저장합니다. 장치 픽셀 비율로 DOM을 래스터화하며 브라우저 네이티브 스크린샷과 동일하다고 보장하지 않습니다. 지도 타일은 CORS 허용 여부에 영향을 받습니다.
+- **전체화면 녹화 / 녹화 종료**: localhost/HTTPS에서 현재 대시보드 탭을 선택합니다. `full-tab.webm`은 브라우저가 전달한 탭의 화면·스크롤을 기록하며 스크롤 밖 전체 페이지를 동시에 촬영하지 않습니다. WebM은 압축 영상입니다.
+- 격자·그래프는 실제 캔버스 paint에 맞춰 별도 영상으로 저장합니다. 다른 패널은 현재 탭 확인이 가능한 경우 화면에 완전히 보인 구간만 원본 캡처에서 잘라 저장합니다. 숨겨진 패널이나 크기가 바뀐 패널의 프레임은 생략될 수 있습니다.
+- `frames.jsonl`과 manifest에 시각·소스 해상도·생략·오류를 남깁니다. 앱은 고정 FPS를 맞추기 위해 프레임을 복제하거나 확대하지 않습니다. 기록된 frame 수는 콜백/캔버스 요청 수이며 인코딩 파일의 디코드 프레임 수와 같다는 보장은 없습니다. 메모리 보관 데이터 약 512MiB에서 자동 저장합니다.
+
+## 파일과 다시 그리기
+
+기록은 `/home/ubuntu/water_survey_data/`의 조사별 폴더와 `sensor_raw/`에 보존됩니다.
 
 | 파일 | 내용 |
 | --- | --- |
-| `samples.csv` | DO, UTC 요청·수신 시간, GPS, 위치 출처, 경유지, IMU, 응답시간, 원본 응답 |
-| `mission.json`, `events.jsonl` | 조사 조건, 경로, 상태, 도착·종료 이벤트 |
-| `gps.jsonl`, `imu.jsonl`, `commands.jsonl` | 실제 GPS·IMU와 발행 명령; 해당 기록이 있을 때 생성 |
-| `grid.csv`, `grid.geojson` | 관측 격자의 평균·최소·최대·개수와 도형 |
-| `samples.geojson`, `route.geojson` | 측정 위치와 경유지 |
-| `map.svg`, `timeseries.svg`, `report.html` | 확대 가능한 이미지와 브라우저에서 다시 열 수 있는 보고서 |
+| `samples.csv` | DO, UTC 요청·수신 시각, GPS, 위치 출처, 경유지, IMU, 응답 시간, 원본 응답 |
+| `mission.json`, `events.jsonl` | 경로·관측·주행 전략, 설정, 시작·방향 전환·중앙 안내점 통과·종료 |
+| `gps.jsonl`, `imu.jsonl`, `lidar.jsonl`, `commands.jsonl` | 조사 중 실제 수신 정보와 발행 명령. 데이터가 있을 때 생성 |
+| `grid.csv`, `grid.geojson`, `samples.geojson`, `route.geojson` | 관측 평균·최소·최대·개수와 좌표 도형 |
+| `map.svg`, `timeseries.svg`, `report.html` | 좌표 기반 지도, 시간 그래프, 독립 보고서 |
 
-화면에서 격자·그래프 PNG 저장도 지원한다. 경로는 JSON으로 저장·불러온다. 지도 타일은 내보내기 ZIP에 포함하지 않는다. 재생성은 `python water_survey/scripts/plot_csv.py samples.csv --output figures`로 한다(matplotlib 필요).
-
-DO 수신 시 최근 2초 이내 GPS를 결합하며, 시간은 선박 수신 시각이다. 센서 자체 측정 시각·프로브 반응 지연은 보정하지 않는다. 빈 격자는 미관측이며 색 범위 2~12 mg/L는 표시 기준이다. 수영강 현장에서는 수온·염분·조류·측정 깊이와 장착 위치를 함께 기록해야 한다. 센서 교정값은 변경하지 않는다.
-
-자세한 운영 문서: [manual.html](water_survey/water_survey/static/manual.html) (대시보드의 사용 설명 버튼에서도 열 수 있음).
-
-## 개발 확인
+DO에는 최근 2초 이내의 선박 수신 GPS를 결합합니다. 센서 내부 측정 시각·프로브 반응 지연·안테나/프로브 거리 보정은 하지 않습니다. 클릭 위치는 `position_source=simulated`, `experimental=true`로 구분합니다. 지도 배경 타일은 조사 ZIP에 복제하지 않습니다.
 
 ```bash
-PYTHONPATH=water_survey python3 -m unittest discover -s water_survey/tests -v
+python water_survey/scripts/plot_csv.py samples.csv --output figures
+PYTHONPATH=water_survey python -m unittest discover -s water_survey/tests -v
+python water_survey/scripts/verify_click_survey.py --base http://localhost:8787 --output survey-check
 ```
 
-13개 자동 확인 항목: 순차 경유·관측, 가상 모드 무출력, GPS/IMU/DO 지연 시 정지, 격자 평균, 내보내기, WebSocket 단절 후 조사 지속, 잘못된 요청 거부, 손상된 센서 프레임 거부. 실제 수상 주행 검증은 별도다.
+마지막 명령은 **실제 DO가 들어오는 대시보드에 새 클릭 위치 시험 조사**를 만듭니다. 이미 진행 중인 조사가 있으면 건드리지 않습니다. 지속 WebSocket 읽기와 heartbeat로 연결을 유지하고, 실패하면 자신이 시작한 조사만 정지합니다. 실선박 연결 전의 로컬 fixture 검증과 실제 DO 검증은 별도로 기록합니다.
+
+상세 운영 문서: [manual.html](water_survey/water_survey/static/manual.html). DO 단독 지도는 오염 배출원을 확정하거나 역추적하는 결과가 아닙니다.

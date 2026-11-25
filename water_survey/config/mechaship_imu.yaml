@@ -1,0 +1,12 @@
+# Apply the vessel's existing IMU settings regardless of the launch node name.
+/**:
+  ros__parameters:
+    port: /dev/ttyIMU
+    frame_id: imu_link
+    publish_tf: false
+    sync_period_ms: 30
+    sync_sensor_accel: true
+    sync_sensor_gyro: true
+    sync_sensor_mag: true
+    sync_sensor_quaternion: true
+    enable_filter: true

@@ -1,0 +1,2 @@
+# Fixed service commands only. Install with mode 0440 using visudo validation.
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start water-survey-base.service, /usr/bin/systemctl --no-block stop water-survey-base.service

@@ -35,17 +35,70 @@ class CoreTests(unittest.TestCase):
     def tearDown(self):
         self.s.stop()
 
-    def test_simulated_route_order_and_no_actuation(self):
-        self.s.configure('simulated',[self.p,latlon(2,0,self.p)],{'dwell_s':3,'sim_speed':2})
-        self.s.set_virtual(**self.p); self.sample(); self.s.start('owner')
-        seen=[]
-        for i in range(90):
-            self.clock.advance(.1); self.s.pulse('owner'); self.sample(); self.s.tick()
-            if self.s.state=='dwelling' and self.s.index not in seen: seen.append(self.s.index)
+    def test_click_route_order_and_no_automatic_motion(self):
+        route=[self.p,latlon(10,0,self.p)]
+        self.s.configure('simulated',route,{'dwell_s':3})
+        self.s.set_virtual(**latlon(-10,0,self.p)); self.sample(); self.s.start('owner')
+        original=self.s.position().copy()
+        for _ in range(20):
+            self.clock.advance(.1); self.sample(); self.s.tick()
+        self.assertEqual(self.s.position(),original)
+        self.assertEqual(self.s.state,'running')
+        for i,target in enumerate(route):
+            self.s.set_virtual(**target); self.s.tick()
+            self.assertEqual(self.s.state,'dwelling'); self.assertEqual(self.s.index,i)
+            self.clock.advance(3.1); self.sample(); self.s.tick()
             self.assertIsNone(self.s.output())
-        self.assertEqual(seen,[0,1]); self.assertEqual(self.s.state,'complete')
-        self.assertIsNone(self.s.gps)
-        self.assertTrue(all(r['position_source']=='simulated' for r in self.s.samples))
+        self.assertEqual(self.s.state,'complete'); self.assertIsNone(self.s.gps)
+
+    def test_coverage_visits_every_cell_and_requires_new_measurement(self):
+        ne=latlon(9,9,self.p)
+        area=dict(south=self.p['lat'],west=self.p['lon'],north=ne['lat'],east=ne['lon'])
+        self.s.configure('simulated',[],{'cell_m':5,'dwell_s':3},'coverage',area)
+        self.assertEqual(self.s.plan['targets'],['0,0','1,0','1,1','0,1'])
+        self.s.set_virtual(**self.s.route[0]); self.sample(); self.s.start('o'); self.s.tick()
+        self.clock.advance(3.1); self.s.tick()
+        self.assertEqual(self.s.state,'dwelling')  # A visit alone is not a recorded observation.
+        for target in self.s.route:
+            self.s.set_virtual(**target); self.sample(); self.s.tick()
+            self.clock.advance(3.1); self.sample(); self.s.tick()
+        self.assertEqual(self.s.state,'complete')
+        self.assertEqual(self.s.snapshot()['coverage'],dict(total=4,observed=4))
+        self.assertIsNone(self.s.output())
+        z=zipfile.ZipFile(io.BytesIO(self.rec.bundle(self.s.mission_id)))
+        grid=json.loads(z.read('grid.geojson'))
+        self.assertEqual(len(grid['features']),4)
+        for f in grid['features']:
+            for lon,lat in f['geometry']['coordinates'][0]:
+                self.assertLessEqual(lon,area['east']+1e-10); self.assertLessEqual(lat,area['north']+1e-10)
+        import xml.etree.ElementTree as ET
+        rectangles=[p for p in ET.fromstring(z.read('map.svg')).iter() if p.tag.endswith('rect') and p.get('stroke')=='white']
+        self.assertEqual(len(rectangles),4)
+        self.assertLess(min(float(p.get('width')) for p in rectangles),max(float(p.get('width')) for p in rectangles))
+        self.assertLess(min(float(p.get('height')) for p in rectangles),max(float(p.get('height')) for p in rectangles))
+
+    def test_coverage_limits_and_outside_samples(self):
+        ne=latlon(100,100,self.p); area=dict(south=self.p['lat'],west=self.p['lon'],north=ne['lat'],east=ne['lon'])
+        with self.assertRaises(ValueError): self.s.configure('simulated',[],{'cell_m':1},'coverage',area)
+        self.s.configure('simulated',[],{'cell_m':20},'coverage',area)
+        self.s.set_virtual(**latlon(-10,-10,self.p)); self.sample(); self.s.start('o'); self.sample()
+        self.assertEqual(self.s.mapped,0)
+        self.s.stop(); self.rec.bundle(self.s.mission_id)  # Out-of-area geolocated samples still export.
+        self.s.new_map(); self.assertIsNone(self.s.mission_id); self.assertEqual(self.s.route,[])
+        self.assertEqual(len(self.rec.folders()),1)
+
+    def test_dynamic_scale_uses_accumulated_cell_means(self):
+        self.s.configure('simulated',[self.p],{}); self.s.set_virtual(**self.p); self.sample(); self.s.start('o')
+        self.sample(8); self.s.set_virtual(**latlon(12,0,self.p)); self.sample(8.01)
+        self.assertEqual(self.s.snapshot()['color_scale'],[8,8.01])
+        self.s.set_virtual(**self.p); self.sample(7.98)
+        self.assertEqual(self.s.snapshot()['color_scale'],[7.99,8.01])
+        for _ in range(605): self.sample(8)
+        self.assertEqual(self.s.do_range,[7.98,8.01])
+        self.s.stop()
+        z=zipfile.ZipFile(io.BytesIO(self.rec.bundle(self.s.mission_id)))
+        meta=json.loads(z.read('mission.json'))
+        self.assertAlmostEqual(meta['color_scale']['max_mg_l'],8.01)
 
     def test_real_arm_and_control_units(self):
         self.prepare_real()
@@ -97,7 +150,8 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.s.configure('simulated',[self.p],{'throttle':90})
         with self.assertRaises(ValueError): self.rec.folder_for('../escape')
         self.s.configure('simulated',[self.p],{}); self.s.set_virtual(**self.p); self.sample(); self.s.start('o')
-        with self.assertRaises(ValueError): self.s.set_virtual(**self.p)
+        self.s.set_virtual(**self.p)
+        with self.assertRaises(ValueError): self.s.reset_position()
         with self.assertRaises(ValueError): self.s.configure('real',[],{})
 
     def test_two_fresh_fixes_for_arrival(self):
@@ -142,12 +196,22 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post('start',{})).status,200)
         self.s.add_do(8.6,utc(),utc(),20,'73','WL118D283','V403')
         self.assertIsNone(self.s.output())
-        self.assertEqual((await self.post('virtual',p)).status,400)
+        self.assertEqual((await self.post('virtual',p)).status,200)
         await self.ws.close(); await asyncio.sleep(.05)
         self.assertEqual(self.s.state,'running')
         self.s.stop()
         r=await self.client.get('/api/export/'+self.s.mission_id)
         self.assertEqual(r.status,200); self.assertTrue(zipfile.is_zipfile(io.BytesIO(await r.read())))
+
+    async def test_ping_and_bringup_allowlist(self):
+        await self.ws.send_json({'type':'ping','sent':123.5})
+        while True:
+            message=await self.ws.receive_json()
+            if message['type']=='pong': break
+        self.assertEqual(message['sent'],123.5)
+        response=await self.post('bringup-start',{})
+        self.assertEqual(response.status,400)
+        self.assertEqual((await self.post('bringup-shell',{'cmd':'unsafe'})).status,400)
 
     async def test_cross_origin_and_missing_session_rejected(self):
         r=await self.client.post('/api/stop',json={'client':self.key},headers={'Origin':'https://evil.invalid'})
